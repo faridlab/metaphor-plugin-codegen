@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package metaphor.domain.repository;
+
+import "metaphor/domain/entity/metaphor.proto";
+import "buf/validate/validate.proto";
+
+// Metaphor repository interface (CQRS pattern)
+service MetaphorRepository {
+  // Command operations (Write side)
+  rpc Save(SaveMetaphorRequest) returns (SaveMetaphorResponse);
+  rpc Update(UpdateMetaphorRequest) returns (UpdateMetaphorResponse);
+  rpc Delete(DeleteMetaphorRequest) returns (DeleteMetaphorResponse);
+  rpc SaveBatch(SaveMetaphorBatchRequest) returns (SaveMetaphorBatchResponse);
+
+  // Query operations (Read side)
+  rpc FindById(FindByIdRequest) returns (FindByIdResponse);
+  rpc FindByName(FindByNameRequest) returns (FindByNameResponse);
+  rpc FindByStatus(FindByStatusRequest) returns (FindByStatusResponse);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+// Command messages
+message SaveMetaphorRequest {
+  metaphor.domain.entity.Metaphor metaphor = 1 [(buf.validate.field).required = true];
+}
+
+message SaveMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message UpdateMetaphorRequest {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  metaphor.domain.entity.Metaphor metaphor = 2 [(buf.validate.field).required = true];
+  int64 expected_version = 3 [(buf.validate.field).int64.gte = 1];
+}
+
+message UpdateMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message DeleteMetaphorRequest {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+}
+
+message DeleteMetaphorResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message SaveMetaphorBatchRequest {
+  repeated metaphor.domain.entity.Metaphor metaphors = 1 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message SaveMetaphorBatchResponse {
+  repeated SaveMetaphorResponse results = 1;
+  int32 success_count = 2;
+  int32 failure_count = 3;
+}
+
+// Query messages
+message FindByIdRequest {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+}
+
+message FindByIdResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool found = 2;
+}
+
+message FindByNameRequest {
+  string name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true];
+}
+
+message FindByNameResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool found = 2;
+}
+
+message FindByStatusRequest {
+  metaphor.domain.entity.MetaphorStatus status = 1 [(buf.validate.field).enum.defined_only = true];
+  int32 page = 2 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+}
+
+message FindByStatusResponse {
+  repeated metaphor.domain.entity.Metaphor metaphors = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int32 total_pages = 5;
+}
+
+message ListRequest {
+  int32 page = 1 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 2 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+  string sort_by = 3 [(buf.validate.field).string.in = ["id", "name", "created_at", "updated_at"]];
+  bool sort_desc = 4;
+}
+
+message ListResponse {
+  repeated metaphor.domain.entity.Metaphor metaphors = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int32 total_pages = 5;
+}
+
+message SearchRequest {
+  string query = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 100)];
+  repeated string filters = 2;
+  int32 limit = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+}
+
+message SearchResponse {
+  repeated metaphor.domain.entity.Metaphor results = 1;
+  int32 total = 2;
+}

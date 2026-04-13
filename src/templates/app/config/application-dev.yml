@@ -1,0 +1,56 @@
+# Development Environment Configuration
+# Overrides application.yml for development
+
+server:
+  host: "127.0.0.1"
+  port: 3000
+  workers: 1  # Single worker for easier debugging
+
+logging:
+  level: "debug"
+  format: "pretty"  # Human-readable format for development
+  targets:
+    - console
+
+security:
+  cors:
+    allowed_origins:
+      - "http://localhost:3000"
+      - "http://localhost:5173"  # Vite dev server
+  rate_limit:
+    requests_per_minute: 1000  # Relaxed limits for development
+
+modules:
+  sapiens:
+    enabled: true
+    features:
+      registration: true
+      email_verification: false  # Disabled for easier testing
+      password_reset: true
+
+  postman:
+    enabled: true
+    smtp_port: 1025  # MailHog for development
+
+  bucket:
+    enabled: true
+    storage_type: "local"
+    local_storage_path: "./storage"
+
+external_services:
+  redis:
+    url: "redis://localhost:6379"
+
+  elasticsearch:
+    enabled: false  # Optional for development
+
+health:
+  check_interval: 10  # More frequent checks in development
+
+jobs:
+  enabled: true
+  max_workers: 2
+
+metrics:
+  prometheus:
+    enabled: false  # Disable in development unless needed

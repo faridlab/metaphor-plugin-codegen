@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+package metaphor.domain.usecase;
+
+import "metaphor/domain/entity/metaphor.proto";
+import "metaphor/domain/value_object/common.proto";
+import "buf/validate/validate.proto";
+
+// Metaphor Use Case Commands (CQRS Write Model)
+service MetaphorCommandService {
+  // Core CRUD commands
+  rpc CreateMetaphor(CreateMetaphorCommand) returns (CreateMetaphorResponse);
+  rpc UpdateMetaphor(UpdateMetaphorCommand) returns (UpdateMetaphorResponse);
+  rpc DeleteMetaphor(DeleteMetaphorCommand) returns (DeleteMetaphorResponse);
+
+  // Business operation commands
+  rpc ActivateMetaphor(ActivateMetaphorCommand) returns (ActivateMetaphorResponse);
+  rpc DeactivateMetaphor(DeactivateMetaphorCommand) returns (DeactivateMetaphorResponse);
+  rpc SuspendMetaphor(SuspendMetaphorCommand) returns (SuspendMetaphorResponse);
+  rpc ArchiveMetaphor(ArchiveMetaphorCommand) returns (ArchiveMetaphorResponse);
+
+  // Batch operations
+  rpc CreateMetaphorBatch(CreateMetaphorBatchCommand) returns (CreateMetaphorBatchResponse);
+  rpc UpdateMetaphorBatch(UpdateMetaphorBatchCommand) returns (UpdateMetaphorBatchResponse);
+
+  // Management commands
+  rpc AddTags(AddTagsCommand) returns (AddTagsResponse);
+  rpc RemoveTags(RemoveTagsCommand) returns (RemoveTagsResponse);
+  rpc UpdateMetadata(UpdateMetadataCommand) returns (UpdateMetadataResponse);
+}
+
+// Command definitions
+message CreateMetaphorCommand {
+  string name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 100];
+  string description = 2 [(buf.validate.field).string.max_len = 500];
+  repeated string tags = 3;
+  map<string, string> metadata = 4;
+}
+
+message CreateMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+  repeated string validation_errors = 4;
+}
+
+message UpdateMetaphorCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  optional string name = 2 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 100)];
+  optional string description = 3 [(buf.validate.field).string.max_len = 500)];
+  int64 expected_version = 4 [(buf.validate.field).int64.gte = 1];
+}
+
+message UpdateMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+  repeated string validation_errors = 4;
+}
+
+message DeleteMetaphorCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  bool hard_delete = 2;
+}
+
+message DeleteMetaphorResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ActivateMetaphorCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+}
+
+message ActivateMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message DeactivateMetaphorCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  string reason = 2 [(buf.validate.field).string.max_len = 500)];
+}
+
+message DeactivateMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message SuspendMetaphorCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  string reason = 2 [(buf.validate.field).string.max_len = 500)];
+  optional string suspension_end_date = 3;
+}
+
+message SuspendMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message ArchiveMetaphorCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+}
+
+message ArchiveMetaphorResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message CreateMetaphorBatchCommand {
+  repeated CreateMetaphorCommand commands = 1 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message CreateMetaphorBatchResponse {
+  repeated CreateMetaphorResponse results = 1;
+  int32 success_count = 2;
+  int32 failure_count = 3;
+}
+
+message UpdateMetaphorBatchCommand {
+  repeated UpdateMetaphorCommand commands = 1 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message UpdateMetaphorBatchResponse {
+  repeated UpdateMetaphorResponse results = 1;
+  int32 success_count = 2;
+  int32 failure_count = 3;
+}
+
+message AddTagsCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  repeated string tags = 2 [(buf.validate.field).repeated.min_items = 1, (buf.validate.field).repeated.max_items = 50)];
+}
+
+message AddTagsResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message RemoveTagsCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  repeated string tags = 2 [(buf.validate.field).repeated.min_items = 1)];
+}
+
+message RemoveTagsResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message UpdateMetadataCommand {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  map<string, string> metadata = 2;
+  string operation = 3 [(buf.validate.field).string.in = ["replace", "merge", "delete"]];
+}
+
+message UpdateMetadataResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool success = 2;
+  string message = 3;
+}

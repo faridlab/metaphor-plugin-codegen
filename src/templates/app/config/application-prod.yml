@@ -1,0 +1,62 @@
+# Production Environment Configuration
+# Production-hardened settings
+
+server:
+  workers: 8  # Optimize for production
+  keep_alive: 75
+  read_timeout: 30
+  write_timeout: 30
+
+logging:
+  level: "info"
+  format: "json"
+  targets:
+    - console
+    - file: "/var/log/metaphor/app.log"
+  tracing:
+    sample_rate: 0.1  # Sample 10% of traces in production
+
+security:
+  cors:
+    allowed_origins: "${ALLOWED_ORIGINS}"  # Must be set in production
+  rate_limit:
+    requests_per_minute: 60  # Stricter limits for production
+
+modules:
+  sapiens:
+    enabled: true
+    features:
+      registration: "${USER_REGISTRATION:true}"  # Can be disabled in production
+      email_verification: true  # Always enabled in production
+      password_reset: true
+
+  postman:
+    enabled: true
+    smtp_use_tls: true
+    smtp_port: 587
+
+  bucket:
+    enabled: true
+    storage_type: "s3"  # Use S3 in production
+    max_file_size: 52428800  # 50MB
+
+external_services:
+  redis:
+    url: "${REDIS_URL}"
+    pool_size: 20
+
+  elasticsearch:
+    enabled: "${ELASTICSEARCH_ENABLED:false}"
+    url: "${ELASTICSEARCH_URL}"
+
+health:
+  check_interval: 60  # Less frequent in production
+
+jobs:
+  enabled: true
+  max_workers: 8
+
+metrics:
+  prometheus:
+    enabled: true
+    port: 9090

@@ -1,0 +1,227 @@
+syntax = "proto3";
+
+package metaphor.domain.event;
+
+import "google/protobuf/timestamp.proto";
+import "buf/validate/validate.proto";
+
+// Metaphor Domain Events - Events that express something that happened in the domain
+service MetaphorEventService {
+  // Event publishing
+  rpc PublishEvent(PublishEventRequest) returns (PublishEventResponse);
+  rpc PublishEventBatch(PublishEventBatchRequest) returns (PublishEventBatchResponse);
+
+  // Event querying
+  rpc GetEventById(GetEventByIdRequest) returns (GetEventByIdResponse);
+  rpc GetEventsByAggregateId(GetEventsByAggregateIdRequest) returns (GetEventsByAggregateIdResponse);
+  rpc GetEventsByType(GetEventsByTypeRequest) returns (GetEventsByTypeResponse);
+  rpc GetEventsByTimeRange(GetEventsByTimeRangeRequest) returns (GetEventsByTimeRangeResponse);
+
+  // Event replay
+  rpc ReplayEvents(ReplayEventsRequest) returns (ReplayEventsResponse);
+
+  // Event management
+  rpc ArchiveEvents(ArchiveEventsRequest) returns (ArchiveEventsResponse);
+  rpc PurgeEvents(PurgeEventsRequest) returns (PurgeEventsResponse);
+}
+
+// Core event structure
+message MetaphorDomainEvent {
+  // Event metadata
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  string event_type = 2 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true)];
+  string aggregate_id = 3 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  string aggregate_type = 4 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true)];
+
+  // Event data
+  string event_data = 5 [(buf.validate.field).required = true)];
+  map<string, string> metadata = 6;
+
+  // Timestamps
+  google.protobuf.Timestamp occurred_at = 7 [(buf.validate.field).required = true)];
+  google.protobuf.Timestamp published_at = 8;
+  optional google.protobuf.Timestamp processed_at = 9;
+
+  // Versioning
+  int64 aggregate_version = 10 [(buf.validate.field).int64.gte = 1)];
+  int64 event_version = 11 [(buf.validate.field).int64.gte = 1)];
+
+  // Causation
+  optional string causation_id = 12 [(buf.validate.field).string.uuid = true)];
+  optional string correlation_id = 13 [(buf.validate.field).string.uuid = true];
+}
+
+// Specific Metaphor domain events
+message MetaphorCreatedEvent {
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string metaphor_id = 2 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string name = 3 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true)];
+  string description = 4;
+  repeated string tags = 5;
+  map<string, string> metadata = 6;
+  string created_by = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message MetaphorUpdatedEvent {
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string metaphor_id = 2 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  map<string, string> changes = 3;
+  int64 version = 4 [(buf.validate.field).int64.gte = 1)];
+  string updated_by = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message MetaphorStatusChangedEvent {
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string metaphor_id = 2 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string previous_status = 3;
+  string new_status = 4;
+  string reason = 5;
+  string changed_by = 6;
+  google.protobuf.Timestamp changed_at = 7;
+}
+
+message MetaphorDeletedEvent {
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string metaphor_id = 2 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  bool hard_delete = 3;
+  string reason = 4;
+  string deleted_by = 5;
+  google.protobuf.Timestamp deleted_at = 6;
+}
+
+message MetaphorTagsChangedEvent {
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string metaphor_id = 2 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  repeated string added_tags = 3;
+  repeated string removed_tags = 4;
+  string changed_by = 5;
+  google.protobuf.Timestamp changed_at = 6;
+}
+
+message MetaphorMetadataChangedEvent {
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  string metaphor_id = 2 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  map<string, string> previous_metadata = 3;
+  map<string, string> new_metadata = 4;
+  string changed_by = 5;
+  google.protobuf.Timestamp changed_at = 6;
+}
+
+// Service request/response messages
+message PublishEventRequest {
+  MetaphorDomainEvent event = 1 [(buf.validate.field).required = true)];
+}
+
+message PublishEventResponse {
+  bool success = 1;
+  string event_id = 2;
+  string published_at = 3;
+  string message = 4;
+}
+
+message PublishEventBatchRequest {
+  repeated MetaphorDomainEvent events = 1 [(buf.validate.field).repeated.min_items = 1, (buf.validate.field).repeated.max_items = 1000)];
+}
+
+message PublishEventBatchResponse {
+  bool success = 1;
+  repeated PublishEventResponse results = 2;
+  int32 success_count = 3;
+  int32 failure_count = 4;
+  string batch_id = 5;
+}
+
+message GetEventByIdRequest {
+  string event_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+}
+
+message GetEventByIdResponse {
+  MetaphorDomainEvent event = 1;
+  bool found = 2;
+}
+
+message GetEventsByAggregateIdRequest {
+  string aggregate_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  int32 page = 2 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+  google.protobuf.Timestamp from_date = 4;
+  google.protobuf.Timestamp to_date = 5;
+}
+
+message GetEventsByAggregateIdResponse {
+  repeated MetaphorDomainEvent events = 1;
+  int32 total = 2;
+  string aggregate_id = 3;
+}
+
+message GetEventsByTypeRequest {
+  string event_type = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true)];
+  int32 page = 2 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+  google.protobuf.Timestamp from_date = 4;
+  google.protobuf.Timestamp to_date = 5;
+}
+
+message GetEventsByTypeResponse {
+  repeated MetaphorDomainEvent events = 1;
+  int32 total = 2;
+  string event_type = 3;
+}
+
+message GetEventsByTimeRangeRequest {
+  google.protobuf.Timestamp from_date = 1 [(buf.validate.field).required = true)];
+  google.protobuf.Timestamp to_date = 2 [(buf.validate.field).required = true)];
+  int32 page = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 4 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+  repeated string event_types = 5;
+}
+
+message GetEventsByTimeRangeResponse {
+  repeated MetaphorDomainEvent events = 1;
+  int32 total = 2;
+  google.protobuf.Timestamp from_date = 3;
+  google.protobuf.Timestamp to_date = 4;
+}
+
+message ReplayEventsRequest {
+  string aggregate_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  google.protobuf.Timestamp from_date = 2;
+  google.protobuf.Timestamp to_date = 3;
+  bool dry_run = 4;
+}
+
+message ReplayEventsResponse {
+  bool success = 1;
+  string aggregate_id = 2;
+  int32 events_replayed = 3;
+  repeated string errors = 4;
+  google.protobuf.Timestamp replayed_at = 5;
+}
+
+message ArchiveEventsRequest {
+  google.protobuf.Timestamp archive_date = 1 [(buf.validate.field).required = true)];
+  repeated string aggregate_ids = 2;
+  bool dry_run = 3;
+}
+
+message ArchiveEventsResponse {
+  bool success = 1;
+  int32 events_archived = 2;
+  string archive_location = 3;
+  repeated string errors = 4;
+}
+
+message PurgeEventsRequest {
+  google.protobuf.Timestamp purge_date = 1 [(buf.validate.field).required = true)];
+  repeated string aggregate_ids = 2;
+  bool confirm = 3;
+}
+
+message PurgeEventsResponse {
+  bool success = 1;
+  int32 events_purged = 2;
+  repeated string warnings = 3;
+  string confirmation_token = 4;
+}

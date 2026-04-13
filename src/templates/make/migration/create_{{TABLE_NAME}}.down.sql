@@ -1,0 +1,6 @@
+-- Rollback: {{MIGRATION_NAME}}
+-- Drop {{TABLE_NAME}} table
+
+DROP TRIGGER IF EXISTS trigger_{{TABLE_NAME}}_updated_at ON {{TABLE_NAME}};
+DROP FUNCTION IF EXISTS update_{{TABLE_NAME}}_timestamp();
+DROP TABLE IF EXISTS {{TABLE_NAME}};

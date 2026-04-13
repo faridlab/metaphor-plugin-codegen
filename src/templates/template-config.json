@@ -1,0 +1,133 @@
+{
+  "name": "Metaphor App Template",
+  "description": "Clean Architecture template for Metaphor Framework applications",
+  "version": "2.0.0",
+  "variables": {
+    "APP_NAME": {
+      "description": "Application name (kebab-case)",
+      "example": "my-service",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "APP_NAME_PASCAL": {
+      "description": "Application name (PascalCase)",
+      "example": "MyService",
+      "transform": "pascal_case"
+    },
+    "APP_NAME_SNAKE": {
+      "description": "Application name (snake_case)",
+      "example": "my_service",
+      "transform": "snake_case"
+    },
+    "APP_PORT": {
+      "description": "Application port number",
+      "example": "3002",
+      "default": "3000",
+      "pattern": "^[0-9]+$"
+    },
+    "APP_DESCRIPTION": {
+      "description": "Application description",
+      "example": "My service for handling business logic",
+      "default": "Metaphor Framework Application"
+    },
+    "APP_TYPE": {
+      "description": "Application type",
+      "example": "api",
+      "options": ["api", "auth", "worker", "scheduler"],
+      "default": "api"
+    },
+    "DATABASE_TYPE": {
+      "description": "Database type",
+      "example": "postgresql",
+      "options": ["postgresql", "mongodb", "sqlite", "none"],
+      "default": "postgresql"
+    },
+    "DATABASE_NAME": {
+      "description": "Database name",
+      "example": "my_service_db",
+      "transform": "snake_case"
+    },
+    "AUTH_ENABLED": {
+      "description": "Enable authentication",
+      "example": "true",
+      "type": "boolean",
+      "default": "false"
+    },
+    "HEALTH_ENABLED": {
+      "description": "Enable health check endpoints",
+      "example": "true",
+      "type": "boolean",
+      "default": "true"
+    },
+    "METRICS_ENABLED": {
+      "description": "Enable metrics collection",
+      "example": "false",
+      "type": "boolean",
+      "default": "false"
+    },
+    "AUTHOR_NAME": {
+      "description": "Author name",
+      "example": "John Doe",
+      "default": "Metaphor Team"
+    },
+    "AUTHOR_EMAIL": {
+      "description": "Author email",
+      "example": "john@example.com",
+      "default": "team@metaphor.dev"
+    },
+    "CREATION_YEAR": {
+      "description": "Creation year",
+      "example": "2024",
+      "transform": "current_year",
+      "default": "2024"
+    }
+  },
+  "app_types": {
+    "api": {
+      "description": "REST API service",
+      "default_port": "3000",
+      "features": ["http", "grpc", "health", "metrics"],
+      "dependencies": ["axum", "tower-http", "serde_json"]
+    },
+    "auth": {
+      "description": "Authentication service",
+      "default_port": "3002",
+      "features": ["http", "jwt", "password-hashing", "sessions"],
+      "dependencies": ["jsonwebtoken", "argon2", "uuid"]
+    },
+    "worker": {
+      "description": "Background worker service",
+      "default_port": "3003",
+      "features": ["tokio", "tracing", "metrics"],
+      "dependencies": ["tokio", "tracing", "serde"]
+    },
+    "scheduler": {
+      "description": "Task scheduler service",
+      "default_port": "3004",
+      "features": ["cron", "tokio", "persistence"],
+      "dependencies": ["tokio-cron-scheduler", "chrono"]
+    }
+  },
+  "file_patterns": {
+    "include": [
+      "**/*.rs",
+      "**/*.toml",
+      "**/*.yml",
+      "**/*.yaml",
+      "**/*.json",
+      "**/*.md",
+      "Dockerfile",
+      "docker-compose.yml"
+    ],
+    "exclude": [
+      "**/target/**",
+      "**/.git/**",
+      "**/node_modules/**",
+      "**/*.log"
+    ],
+    "binary_files": [
+      "**/*.png",
+      "**/*.jpg",
+      "**/*.ico"
+    ]
+  }
+}

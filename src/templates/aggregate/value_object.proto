@@ -1,0 +1,55 @@
+//! Value Object Template
+
+syntax = "proto3";
+
+package {{MODULE_NAME}}.domain.value_object;
+
+import "buf/validate/validate.proto";
+
+// {{PascalCaseEntity}} Value Object
+//
+// This is a value object that represents a concept in the domain.
+// Value objects are immutable and defined by their attributes.
+message {{PascalCaseEntity}} {
+  // TODO: Add value object fields here
+  // Examples for different types of value objects:
+
+  // For Email Address:
+  // string value = 1 [
+  //   (buf.validate.field).string.email = true,
+  //   (buf.validate.field).required = true
+  // ];
+  // bool is_verified = 2;
+
+  // For Money:
+  // string currency = 1 [
+  //   (buf.validate.field).string.pattern = "^[A-Z]{3}$"
+  // ];
+  // int64 amount = 2 [(buf.validate.field).int64.gte = 0];
+
+  // For Address:
+  // string street = 1 [(buf.validate.field).string.min_len = 1];
+  // string city = 2 [(buf.validate.field).string.min_len = 1];
+  // string state = 3 [(buf.validate.field).string.pattern = "^[A-Z]{2}$"];
+  // string postal_code = 4 [(buf.validate.field).string.pattern = "^\\d{5}(-\\d{4})?$"];
+  // string country = 5 [(buf.validate.field).string.pattern = "^[A-Z]{2}$"];
+
+  // For Range:
+  // int64 min_value = 1;
+  // int64 max_value = 2 [(buf.validate.field).int64.gte = 1];
+
+  // TODO: Replace this placeholder with actual fields
+  string value = 1 [(buf.validate.field).required = true];
+}
+
+// Validation rules for {{PascalCaseEntity}}
+message {{PascalCaseEntity}}ValidationRules {
+  // TODO: Add validation rules specific to this value object
+  // Example for age validation:
+  // int32 min_age = 1;
+  // int32 max_age = 2;
+
+  // Example for phone number validation:
+  // repeated string allowed_country_codes = 1;
+  // bool require_verification = 2;
+}

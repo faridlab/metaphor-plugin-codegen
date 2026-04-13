@@ -1,0 +1,86 @@
+[package]
+name = "{{kebab_case APP_NAME}}"
+version = "0.1.0"
+edition = "2021"
+authors = ["{{AUTHOR_NAME}}"]
+description = "{{APP_DESCRIPTION}}"
+
+[[bin]]
+name = "{{snake_case APP_NAME}}"
+path = "src/main.rs"
+
+[dependencies]
+# Framework Core
+metaphor-core = { workspace = true }
+metaphor-orm = { workspace = true }
+metaphor-health = { workspace = true }
+metaphor-messaging = { workspace = true }
+# TODO: Add metaphor-auth when fully implemented
+# metaphor-auth = { workspace = true }
+
+# Business Modules (DDD bounded contexts)
+# These will be added as we create them:
+# sapiens = { path = "../../libs/modules/sapiens" }
+# postman = { path = "../../libs/modules/postman" }
+# bucket = { path = "../../libs/modules/bucket" }
+
+# Core Dependencies (inherited from workspace)
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+
+# Web Framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tower-cookies = { workspace = true }
+
+# Configuration Management
+config = { workspace = true }
+dotenvy = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Database (PostgreSQL Primary)
+sqlx = { workspace = true }
+
+# Error Handling
+thiserror = { workspace = true }
+
+# HTTP/REST
+reqwest = { workspace = true }
+mime = { workspace = true }
+
+# Authentication & Security
+jsonwebtoken = { workspace = true }
+
+# Protocol Buffers (for module integration)
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+prost = { workspace = true }
+
+# CPU Info
+num_cpus = { workspace = true }
+
+# Validation
+validator = { workspace = true }
+
+# Background Jobs
+tokio-cron-scheduler = { workspace = true }
+
+# Development Dependencies
+[dev-dependencies]
+axum-test = { version = "15.0" }
+tempfile = { version = "3.0" }
+mockall = { version = "0.12" }
+
+[features]
+default = ["development"]
+development = []
+production = []
+testing = []

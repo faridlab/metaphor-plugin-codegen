@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package metaphor.domain.service;
+
+import "metaphor/domain/entity/metaphor.proto";
+import "metaphor/domain/value_object/common.proto";
+import "buf/validate/validate.proto";
+
+// Metaphor Domain Service - Business logic that doesn't naturally fit in entities or value objects
+service MetaphorDomainService {
+  // Domain validation services
+  rpc ValidateMetaphorIntegrity(ValidateMetaphorIntegrityRequest) returns (ValidateMetaphorIntegrityResponse);
+  rpc CheckMetaphorBusinessRules(CheckMetaphorBusinessRulesRequest) returns (CheckMetaphorBusinessRulesResponse);
+
+  // Business operation services
+  rpc CalculateMetaphorMetrics(CalculateMetaphorMetricsRequest) returns (CalculateMetaphorMetricsResponse);
+  rpc GenerateMetaphorReport(GenerateMetaphorReportRequest) returns (GenerateMetaphorReportResponse);
+
+  // Integration services
+  rpc SynchronizeMetaphorData(SynchronizeMetaphorDataRequest) returns (SynchronizeMetaphorDataResponse);
+  rpc MigrateMetaphorData(MigrateMetaphorDataRequest) returns (MigrateMetaphorDataResponse);
+
+  // Configuration services
+  rpc OptimizeMetaphorConfiguration(OptimizeMetaphorConfigurationRequest) returns (OptimizeMetaphorConfigurationResponse);
+  rpc ValidateMetaphorConfiguration(ValidateMetaphorConfigurationRequest) returns (ValidateMetaphorConfigurationResponse);
+}
+
+// Request/Response messages
+message ValidateMetaphorIntegrityRequest {
+  string metaphor_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  repeated string validation_rules = 2;
+}
+
+message ValidateMetaphorIntegrityResponse {
+  bool valid = 1;
+  repeated ValidationResult results = 2;
+  string summary = 3;
+}
+
+message ValidationResult {
+  string rule = 1;
+  bool passed = 2;
+  string message = 3;
+  repeated string details = 4;
+}
+
+message CheckMetaphorBusinessRulesRequest {
+  metaphor.domain.entity.Metaphor metaphor = 1 [(buf.validate.field).required = true];
+  string operation = 2 [(buf.validate.field).string.in = ["create", "update", "delete", "activate", "deactivate"]];
+  map<string, string> context = 3;
+}
+
+message CheckMetaphorBusinessRulesResponse {
+  bool allowed = 1;
+  repeated BusinessRuleRule violated_rules = 2;
+  repeated BusinessRuleRule passed_rules = 3;
+  string recommendation = 4;
+}
+
+message BusinessRuleRule {
+  string name = 1;
+  string description = 2;
+  bool passed = 3;
+  string severity = 4;
+  string message = 5;
+}
+
+message CalculateMetaphorMetricsRequest {
+  string metaphor_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  repeated string metric_types = 2;
+  string time_range = 3 [(buf.validate.field).string.in = ["hour", "day", "week", "month", "year", "all"]];
+}
+
+message CalculateMetaphorMetricsResponse {
+  string metaphor_id = 1;
+  repeated MetricValue metrics = 2;
+  string calculation_time = 3;
+  string time_range = 4;
+}
+
+message MetricValue {
+  string name = 1;
+  double value = 2;
+  string unit = 3;
+  map<string, string> metadata = 4;
+}
+
+message GenerateMetaphorReportRequest {
+  string metaphor_id = 1 [(buf.validate.field).string.uuid = true];
+  string report_type = 2 [(buf.validate.field).string.in = ["summary", "detailed", "performance", "health"]];
+  string format = 3 [(buf.validate.field).string.in = ["json", "pdf", "csv"]];
+  map<string, string> parameters = 4;
+}
+
+message GenerateMetaphorReportResponse {
+  string report_id = 1;
+  string status = 2;
+  string download_url = 3;
+  string format = 4;
+  int64 size_bytes = 5;
+  string generated_at = 6;
+}
+
+message SynchronizeMetaphorDataRequest {
+  repeated string metaphor_ids = 1 [(buf.validate.field).repeated.min_items = 1)];
+  string target_system = 2 [(buf.validate.field).string.min_len = 1)];
+  bool full_sync = 3;
+}
+
+message SynchronizeMetaphorDataResponse {
+  repeated SynchronizationResult results = 1;
+  int32 success_count = 2;
+  int32 failure_count = 3;
+  string sync_id = 4;
+}
+
+message SynchronizationResult {
+  string metaphor_id = 1;
+  bool success = 2;
+  string message = 3;
+  string last_synced_at = 4;
+  repeated string warnings = 5;
+}
+
+message MigrateMetaphorDataRequest {
+  string source_system = 1 [(buf.validate.field).string.min_len = 1)];
+  string target_system = 2 [(buf.validate.field).string.min_len = 1)];
+  repeated string metaphor_ids = 3;
+  bool dry_run = 4;
+  map<string, string> migration_options = 5;
+}
+
+message MigrateMetaphorDataResponse {
+  string migration_id = 1;
+  bool dry_run = 2;
+  repeated MigrationResult results = 3;
+  int32 total_count = 4;
+  int32 success_count = 5;
+  int32 failure_count = 6;
+  repeated string warnings = 7;
+}
+
+message MigrationResult {
+  string metaphor_id = 1;
+  bool success = 2;
+  string source_id = 3;
+  string target_id = 4;
+  string message = 5;
+  repeated string errors = 6;
+}
+
+message OptimizeMetaphorConfigurationRequest {
+  string metaphor_id = 1 [(buf.validate.field).string.uuid = true];
+  repeated string optimization_targets = 2;
+  string optimization_level = 3 [(buf.validate.field).string.in = ["basic", "advanced", "aggressive"]];
+}
+
+message OptimizeMetaphorConfigurationResponse {
+  string metaphor_id = 1;
+  bool optimized = 2;
+  repeated ConfigurationOptimization optimizations = 3;
+  string performance_improvement = 4;
+  repeated string recommendations = 5;
+}
+
+message ConfigurationOptimization {
+  string component = 1;
+  string setting = 2;
+  string old_value = 3;
+  string new_value = 4;
+  string impact = 5;
+}
+
+message ValidateMetaphorConfigurationRequest {
+  metaphor.domain.entity.Metaphor metaphor = 1 [(buf.validate.field).required = true];
+  repeated string validation_profiles = 2;
+}
+
+message ValidateMetaphorConfigurationResponse {
+  bool valid = 1;
+  repeated ConfigurationIssue issues = 2;
+  repeated ConfigurationWarning warnings = 3;
+  string validation_profile = 4;
+}
+
+message ConfigurationIssue {
+  string component = 1;
+  string severity = 2;
+  string message = 3;
+  string suggestion = 4;
+}
+
+message ConfigurationWarning {
+  string component = 1;
+  string message = 2;
+  string recommendation = 3;
+}

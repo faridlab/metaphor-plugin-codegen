@@ -1,0 +1,207 @@
+syntax = "proto3";
+
+package metaphor.domain.usecase;
+
+import "metaphor/domain/entity/metaphor.proto";
+import "buf/validate/validate.proto";
+
+// Metaphor Use Case Queries (CQRS Read Model)
+service MetaphorQueryService {
+  // Core read queries
+  rpc GetMetaphorById(GetMetaphorByIdQuery) returns (GetMetaphorByIdResponse);
+  rpc GetMetaphorByName(GetMetaphorByNameQuery) returns (GetMetaphorByNameResponse);
+  rpc ListMetaphors(ListMetaphorsQuery) returns (ListMetaphorsResponse);
+
+  // Filter and search queries
+  rpc GetMetaphorsByStatus(GetMetaphorsByStatusQuery) returns (GetMetaphorsByStatusResponse);
+  rpc GetMetaphorsByTags(GetMetaphorsByTagsQuery) returns (GetMetaphorsByTagsResponse);
+  rpc SearchMetaphors(SearchMetaphorsQuery) returns (SearchMetaphorsResponse);
+
+  // Analytics and reporting queries
+  rpc GetMetaphorStatistics(GetMetaphorStatisticsQuery) returns (GetMetaphorStatisticsResponse);
+  rpc GetMetaphorActivityLog(GetMetaphorActivityLogQuery) returns (GetMetaphorActivityLogResponse);
+  rpc GetMetaphorMetrics(GetMetaphorMetricsQuery) returns (GetMetaphorMetricsResponse);
+
+  // Validation queries
+  rpc ValidateMetaphorName(ValidateMetaphorNameQuery) returns (ValidateMetaphorNameResponse);
+  rpc CheckMetaphorExists(CheckMetaphorExistsQuery) returns (CheckMetaphorExistsResponse);
+}
+
+// Query definitions
+message GetMetaphorByIdQuery {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  bool include_deleted = 2;
+}
+
+message GetMetaphorByIdResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool found = 2;
+  string message = 3;
+}
+
+message GetMetaphorByNameQuery {
+  string name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true];
+  bool include_inactive = 2;
+}
+
+message GetMetaphorByNameResponse {
+  metaphor.domain.entity.Metaphor metaphor = 1;
+  bool found = 2;
+  string message = 3;
+}
+
+message ListMetaphorsQuery {
+  int32 page = 1 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 2 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+  string sort_by = 3 [(buf.validate.field).string.in = ["id", "name", "created_at", "updated_at", "status"]];
+  bool sort_desc = 4;
+  bool include_deleted = 5;
+  bool include_inactive = 6;
+}
+
+message ListMetaphorsResponse {
+  repeated metaphor.domain.entity.Metaphor metaphors = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int32 total_pages = 5;
+  bool has_next = 6;
+  bool has_previous = 7;
+}
+
+message GetMetaphorsByStatusQuery {
+  metaphor.domain.entity.MetaphorStatus status = 1 [(buf.validate.field).enum.defined_only = true];
+  int32 page = 2 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+  string sort_by = 4 [(buf.validate.field).string.in = ["created_at", "updated_at", "name"]];
+  bool sort_desc = 5;
+}
+
+message GetMetaphorsByStatusResponse {
+  repeated metaphor.domain.entity.Metaphor metaphors = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int32 total_pages = 5;
+  metaphor.domain.entity.MetaphorStatus status = 6;
+}
+
+message GetMetaphorsByTagsQuery {
+  repeated string tags = 1 [(buf.validate.field).repeated.min_items = 1, (buf.validate.field).repeated.max_items = 50)];
+  bool match_all = 2;
+  int32 page = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 4 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+}
+
+message GetMetaphorsByTagsResponse {
+  repeated metaphor.domain.entity.Metaphor metaphors = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int32 total_pages = 5;
+  repeated string searched_tags = 6;
+}
+
+message SearchMetaphorsQuery {
+  string query = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 100)];
+  repeated string search_fields = 2;
+  repeated string filters = 3;
+  int32 limit = 4 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+  int32 page = 5 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+}
+
+message SearchMetaphorsResponse {
+  repeated metaphor.domain.entity.Metaphor results = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int32 total_pages = 5;
+  string search_query = 6;
+  repeated string applied_filters = 7;
+}
+
+message GetMetaphorStatisticsQuery {
+  string start_date = 1 [(buf.validate.field).string.pattern = "^\\d{4}-\\d{2}-\\d{2}$"];
+  string end_date = 2 [(buf.validate.field).string.pattern = "^\\d{4}-\\d{2}-\\d{2}$"];
+  bool group_by_status = 3;
+  bool group_by_day = 4;
+}
+
+message GetMetaphorStatisticsResponse {
+  int32 total_count = 1;
+  int32 active_count = 2;
+  int32 inactive_count = 3;
+  int32 created_count = 4;
+  int32 updated_count = 5;
+  int32 deleted_count = 6;
+  map<string, int32> status_counts = 7;
+  map<string, int32> daily_counts = 8;
+  string start_date = 9;
+  string end_date = 10;
+}
+
+message GetMetaphorActivityLogQuery {
+  string metaphor_id = 1 [(buf.validate.field).string.uuid = true];
+  int32 limit = 2 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+}
+
+message GetMetaphorActivityLogResponse {
+  repeated ActivityEntry activities = 1;
+  int32 total = 2;
+  string metaphor_id = 3;
+}
+
+message ActivityEntry {
+  string id = 1;
+  string event_type = 2;
+  string description = 3;
+  string performed_by = 4;
+  string timestamp = 5;
+  map<string, string> metadata = 6;
+}
+
+message GetMetaphorMetricsQuery {
+  string metric_type = 1 [(buf.validate.field).string.in = ["performance", "usage", "health", "custom"]];
+  string time_range = 2 [(buf.validate.field).string.in = ["hour", "day", "week", "month", "year"]];
+}
+
+message GetMetaphorMetricsResponse {
+  string metric_type = 1;
+  string time_range = 2;
+  repeated MetricPoint points = 3;
+  double average = 4;
+  double min = 5;
+  double max = 6;
+}
+
+message MetricPoint {
+  string timestamp = 1;
+  double value = 2;
+  map<string, string> labels = 3;
+}
+
+message ValidateMetaphorNameQuery {
+  string name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 100)];
+  optional string exclude_id = 2 [(buf.validate.field).string.uuid = true];
+}
+
+message ValidateMetaphorNameResponse {
+  bool valid = 1;
+  bool available = 2;
+  string message = 3;
+  repeated string suggestions = 4;
+}
+
+message CheckMetaphorExistsQuery {
+  oneof identifier {
+    string id = 1;
+    string name = 2;
+  }
+}
+
+message CheckMetaphorExistsResponse {
+  bool exists = 1;
+  string identifier = 2;
+  metaphor.domain.entity.Metaphor metaphor = 3;
+}

@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package metaphor.domain.entity;
+
+// Import common types
+import "google/protobuf/timestamp.proto";
+import "buf/validate/validate.proto";
+
+// Metaphor aggregate root - main domain entity
+message Metaphor {
+  // Primary key
+  string id = 1 [(buf.validate.field).string.uuid = true];
+
+  // Core attributes
+  string name = 2 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 100];
+  string description = 3 [(buf.validate.field).string.max_len = 500];
+
+  // Status and state
+  MetaphorStatus status = 4 [(buf.validate.field).enum.defined_only = true];
+  bool active = 5;
+
+  // Configuration
+  repeated string tags = 6;
+  map<string, string> metadata = 7;
+
+  // Timestamps
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  optional google.protobuf.Timestamp deleted_at = 10;
+
+  // Domain Events
+  repeated MetaphorEvent pending_events = 20;
+}
+
+// Metaphor status enumeration
+enum MetaphorStatus {
+  BACKBONE_STATUS_UNSPECIFIED = 0;
+  BACKBONE_STATUS_ACTIVE = 1;
+  BACKBONE_STATUS_INACTIVE = 2;
+  BACKBONE_STATUS_PENDING = 3;
+  BACKBONE_STATUS_SUSPENDED = 4;
+  BACKBONE_STATUS_ARCHIVED = 5;
+}
+
+// Domain event representation
+message MetaphorEvent {
+  string event_id = 1 [(buf.validate.field).string.uuid = true];
+  string event_type = 2 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp occurred_at = 3;
+  string aggregate_id = 4 [(buf.validate.field).string.uuid = true];
+  string data = 5 [(buf.validate.field).required = true];
+  int32 version = 6 [(buf.validate.field).int32.gte = 1];
+}

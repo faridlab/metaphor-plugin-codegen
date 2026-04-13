@@ -1,0 +1,154 @@
+//! Repository Interface Template
+
+syntax = "proto3";
+
+package {{MODULE_NAME}}.domain.repository;
+
+import "{{MODULE_NAME}}/domain/entity/{{entity_name_snake}}.proto";
+
+// {{PascalCaseEntity}} Repository Interface
+//
+// This service defines the repository interface for {{PascalCaseEntity}} aggregate.
+// It follows DDD repository patterns and provides collection-like semantics.
+service {{PascalCaseEntity}}Repository {
+  // Save {{PascalCaseEntity}} aggregate (create or update)
+  rpc Save(Save{{PascalCaseEntity}}Request) returns (Save{{PascalCaseEntity}}Response);
+
+  // Find {{PascalCaseEntity}} by ID
+  rpc FindById(Find{{PascalCaseEntity}}ByIdRequest) returns (Find{{PascalCaseEntity}}ByIdResponse);
+
+  // Find multiple {{PascalCaseEntity}} by IDs
+  rpc FindByIds(Find{{PascalCaseEntity}}ByIdsRequest) returns (Find{{PascalCaseEntity}}ByIdsResponse);
+
+  // Find all {{PascalCaseEntity}} aggregates
+  rpc FindAll(FindAll{{PascalCaseEntity}}Request) returns (FindAll{{PascalCaseEntity}}Response);
+
+  // Find {{PascalCaseEntity}} with pagination
+  rpc FindWithPagination(Find{{PascalCaseEntity}}WithPaginationRequest) returns (Find{{PascalCaseEntity}}WithPaginationResponse);
+
+  // Find {{PascalCaseEntity}} by criteria
+  rpc FindByCriteria(Find{{PascalCaseEntity}}ByCriteriaRequest) returns (Find{{PascalCaseEntity}}ByCriteriaResponse);
+
+  // Delete {{PascalCaseEntity}} (soft delete)
+  rpc Delete(Delete{{PascalCaseEntity}}Request) returns (Delete{{PascalCaseEntity}}Response);
+
+  // Restore deleted {{PascalCaseEntity}}
+  rpc Restore(Restore{{PascalCaseEntity}}Request) returns (Restore{{PascalCaseEntity}}Response);
+
+  // Check if {{PascalCaseEntity}} exists
+  rpc Exists(Exists{{PascalCaseEntity}}Request) returns (Exists{{PascalCaseEntity}}Response);
+
+  // Count {{PascalCaseEntity}} aggregates
+  rpc Count(Count{{PascalCaseEntity}}Request) returns (Count{{PascalCaseEntity}}Response);
+
+  // TODO: Add custom query methods specific to your domain
+  // rpc FindByStatus(Find{{PascalCaseEntity}}ByStatusRequest) returns (Find{{PascalCaseEntity}}ByStatusResponse);
+  // rpc FindByDateRange(Find{{PascalCaseEntity}}ByDateRangeRequest) returns (Find{{PascalCaseEntity}}ByDateRangeResponse);
+}
+
+// Request/Response Messages
+
+message Save{{PascalCaseEntity}}Request {
+  {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_snake}} = 1;
+}
+
+message Save{{PascalCaseEntity}}Response {
+  {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_snake}} = 1;
+}
+
+message Find{{PascalCaseEntity}}ByIdRequest {
+  string id = 1;
+}
+
+message Find{{PascalCaseEntity}}ByIdResponse {
+  {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_snake}} = 1;
+}
+
+message Find{{PascalCaseEntity}}ByIdsRequest {
+  repeated string ids = 1;
+}
+
+message Find{{PascalCaseEntity}}ByIdsResponse {
+  repeated {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_plural}} = 1;
+}
+
+message FindAll{{PascalCaseEntity}}Request {
+  // Optional: Include soft-deleted aggregates
+  bool include_deleted = 1;
+}
+
+message FindAll{{PascalCaseEntity}}Response {
+  repeated {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_plural}} = 1;
+}
+
+message Find{{PascalCaseEntity}}WithPaginationRequest {
+  int32 page = 1;
+  int32 limit = 2;
+  // Optional: Include soft-deleted aggregates
+  bool include_deleted = 3;
+}
+
+message Find{{PascalCaseEntity}}WithPaginationResponse {
+  repeated {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_plural}} = 1;
+  int64 total_count = 2;
+  int32 page = 3;
+  int32 limit = 4;
+  int32 total_pages = 5;
+}
+
+message Find{{PascalCaseEntity}}ByCriteriaRequest {
+  // TODO: Add criteria fields specific to your domain
+  // Example:
+  // string name_contains = 1;
+  // string status = 2;
+  // google.protobuf.Timestamp created_after = 3;
+  // google.protobuf.Timestamp created_before = 4;
+}
+
+message Find{{PascalCaseEntity}}ByCriteriaResponse {
+  repeated {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_plural}} = 1;
+}
+
+message Delete{{PascalCaseEntity}}Request {
+  string id = 1;
+  // Optional: Reason for deletion
+  string reason = 2;
+}
+
+message Delete{{PascalCaseEntity}}Response {
+  bool success = 1;
+}
+
+message Restore{{PascalCaseEntity}}Request {
+  string id = 1;
+}
+
+message Restore{{PascalCaseEntity}}Response {
+  bool success = 1;
+}
+
+message Exists{{PascalCaseEntity}}Request {
+  string id = 1;
+}
+
+message Exists{{PascalCaseEntity}}Response {
+  bool exists = 1;
+}
+
+message Count{{PascalCaseEntity}}Request {
+  // Optional: Count only non-deleted aggregates
+  bool exclude_deleted = 1;
+}
+
+message Count{{PascalCaseEntity}}Response {
+  int64 count = 1;
+}
+
+// TODO: Add custom request/response messages for domain-specific queries
+// message Find{{PascalCaseEntity}}ByStatusRequest {
+//   string status = 1;
+// }
+//
+// message Find{{PascalCaseEntity}}ByStatusResponse {
+//   repeated {{MODULE_NAME}}.domain.entity.{{PascalCaseEntity}} {{entity_name_plural}} = 1;
+// }

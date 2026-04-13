@@ -1,0 +1,135 @@
+//! Domain Events Template
+
+syntax = "proto3";
+
+package {{MODULE_NAME}}.domain.event;
+
+import "google/protobuf/timestamp.proto";
+import "buf/validate/validate.proto";
+
+// {{PascalCaseEntity}} Domain Events
+//
+// Domain events represent something that happened in the domain
+// that domain experts care about.
+
+// {{PascalCaseEntity}}Created Event
+message {{PascalCaseEntity}}CreatedEvent {
+  // Event metadata
+  string event_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  string aggregate_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true
+  ];
+
+  // TODO: Add event-specific data here
+  // Example:
+  // string created_by = 4;
+  // string name = 5;
+  // map<string, string> metadata = 6;
+}
+
+// {{PascalCaseEntity}}Updated Event
+message {{PascalCaseEntity}}UpdatedEvent {
+  // Event metadata
+  string event_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  string aggregate_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true
+  ];
+
+  // TODO: Add changed fields data here
+  // Example:
+  // string updated_by = 4;
+  // repeated string changed_fields = 5;
+  // map<string, string> old_values = 6;
+  // map<string, string> new_values = 7;
+}
+
+// {{PascalCaseEntity}}Deleted Event
+message {{PascalCaseEntity}}DeletedEvent {
+  // Event metadata
+  string event_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  string aggregate_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true
+  ];
+
+  // TODO: Add deletion-specific data here
+  // Example:
+  // string deleted_by = 4;
+  // string reason = 5;
+}
+
+// Custom domain events for {{PascalCaseEntity}}
+// TODO: Add custom events specific to your domain
+
+// Example: Status changed event
+message {{PascalCaseEntity}}StatusChangedEvent {
+  // Event metadata
+  string event_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  string aggregate_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true
+  ];
+
+  // Event-specific data
+  string old_status = 4;
+  string new_status = 5;
+  string changed_by = 6;
+}
+
+// Example: Business rule violation event
+message {{PascalCaseEntity}}BusinessRuleViolationEvent {
+  // Event metadata
+  string event_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  string aggregate_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true
+  ];
+
+  // Event-specific data
+  string rule_name = 4;
+  string rule_description = 5;
+  string violation_details = 6;
+  string attempted_by = 7;
+}

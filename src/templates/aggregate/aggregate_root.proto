@@ -1,0 +1,61 @@
+//! Aggregate Root Template
+
+syntax = "proto3";
+
+package {{MODULE_NAME}}.domain.entity;
+
+import "google/protobuf/timestamp.proto";
+import "buf/validate/validate.proto";
+
+// {{PascalCaseEntity}} Aggregate Root
+//
+// This is the aggregate root for the {{MODULE_NAME}} bounded context.
+// It maintains consistency and enforces business invariants.
+message {{PascalCaseEntity}} {
+  // Unique identifier for the aggregate
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).required = true
+  ];
+
+TIMESTAMP_FIELDS_PLACEHOLDER
+
+  // TODO: Add aggregate-specific fields here
+  // Example:
+  // string name = 5 [(buf.validate.field).string.min_len = 1];
+  // int32 quantity = 6 [(buf.validate.field).int32.gt = 0];
+}
+
+// Create {{PascalCaseEntity}} Command
+message Create{{PascalCaseEntity}}Command {
+  // TODO: Add creation fields here
+  // Example:
+  // string name = 1 [(buf.validate.field).string.min_len = 1];
+  // string description = 2;
+}
+
+// Update {{PascalCaseEntity}} Command
+message Update{{PascalCaseEntity}}Command {
+  string id = 1 [(buf.validate.field).string.uuid = true];
+
+  // TODO: Add updatable fields here
+  // Example:
+  // optional string name = 2 [(buf.validate.field).string.min_len = 1];
+  // optional string description = 3;
+}
+
+// {{PascalCaseEntity}} Query Specifications
+message {{PascalCaseEntity}}Query {
+  // Query by ID
+  optional string id = 1;
+
+  // TODO: Add query filters here
+  // Example:
+  // optional string name_filter = 2;
+  // int32 min_quantity = 3;
+  // int32 max_quantity = 4;
+
+  // Pagination
+  optional int32 page = 5 [(buf.validate.field).int32.gte = 0];
+  optional int32 limit = 6 [(buf.validate.field).int32.gt = 0];
+}

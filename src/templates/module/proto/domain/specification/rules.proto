@@ -1,0 +1,237 @@
+syntax = "proto3";
+
+package metaphor.domain.specification;
+
+import "metaphor/domain/entity/metaphor.proto";
+import "buf/validate/validate.proto";
+
+// Metaphor Domain Specifications - Business rules that can be combined and reused
+service MetaphorSpecificationService {
+  // Rule evaluation
+  rpc EvaluateSpecification(EvaluateSpecificationRequest) returns (EvaluateSpecificationResponse);
+  rpc EvaluateSpecificationBatch(EvaluateSpecificationBatchRequest) returns (EvaluateSpecificationBatchResponse);
+
+  // Rule management
+  rpc CreateSpecification(CreateSpecificationRequest) returns (CreateSpecificationResponse);
+  rpc UpdateSpecification(UpdateSpecificationRequest) returns (UpdateSpecificationResponse);
+  rpc DeleteSpecification(DeleteSpecificationRequest) returns (DeleteSpecificationResponse);
+
+  // Rule discovery
+  rpc ListSpecifications(ListSpecificationsRequest) returns (ListSpecificationsResponse);
+  rpc GetSpecificationById(GetSpecificationByIdRequest) returns (GetSpecificationByIdResponse);
+}
+
+// Base specification structure
+message MetaphorSpecification {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true];
+  string name = 2 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true)];
+  string description = 3;
+  string expression = 4 [(buf.validate.field).required = true)];
+  SpecificationType type = 5 [(buf.validate.field).enum.defined_only = true];
+  map<string, string> parameters = 6;
+  bool active = 7;
+  string created_by = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+// Specification types
+enum SpecificationType {
+  SPECIFICATION_TYPE_UNSPECIFIED = 0;
+  SPECIFICATION_TYPE_SIMPLE = 1;      // Single business rule
+  SPECIFICATION_TYPE_COMPOSITE = 2;   // Combination of rules (AND, OR, NOT)
+  SPECIFICATION_TYPE_PARAMETERIZED = 3; // Rule with parameters
+  SPECIFICATION_TYPE_TEMPORAL = 4;     // Time-based rules
+}
+
+// Simple specifications
+message MetaphorNameMustBeValidSpecification {
+  // Name must be between 1 and 100 characters
+  // Name must contain only alphanumeric characters, spaces, hyphens, and underscores
+  // Name must not be empty or contain only whitespace
+}
+
+message MetaphorStatusMustBeValidSpecification {
+  // Status must be one of the defined enum values
+  // Status transitions must follow valid state machine
+}
+
+message MetaphorTagsMustBeUniqueSpecification {
+  // Tags must not contain duplicates
+  // Each tag must be between 1 and 50 characters
+  // Maximum 50 tags per metaphor
+}
+
+message MetaphorMustHaveMetadataSpecification {
+  // Metadata must not be empty
+  // All metadata keys must be strings
+  // All metadata values must be strings
+}
+
+// Composite specifications
+message MetaphorIsActiveSpecification {
+  // Metaphor status must be ACTIVE
+  // Metaphor must not be deleted
+  // Metaphor must be valid
+}
+
+message MetaphorCanDeactivateSpecification {
+  // Metaphor must currently be ACTIVE
+  // Metaphor must not be in SUSPENDED state
+  // Deactivation reason must be provided
+}
+
+message MetaphorCanSuspendSpecification {
+  // Metaphor must be ACTIVE or INACTIVE
+  // Suspension reason must be valid
+  // Suspension period must be reasonable
+}
+
+message MetaphorCanArchiveSpecification {
+  // Metaphor must be INACTIVE
+  // Must be inactive for at least 30 days
+  // No pending operations
+}
+
+// Temporal specifications
+message MetaphorMustBeRecentSpecification {
+  // Metaphor must be created within specified time frame
+  // Useful for reporting and cleanup operations
+}
+
+message MetaphorMustNotBeOlderThanSpecification {
+  // Metaphor must not be older than specified age
+  // Used for cleanup and archival policies
+}
+
+// Parameterized specifications
+message MetaphorTaggedWithSpecification {
+  repeated string required_tags = 1 [(buf.validate.field).repeated.min_items = 1)];
+  bool match_all = 2;
+}
+
+message MetaphorInDateRangeSpecification {
+  google.protobuf.Timestamp start_date = 1;
+  google.protobuf.Timestamp end_date = 2;
+  bool include_start = 3;
+  bool include_end = 4;
+}
+
+message MetaphorWithMetadataKeySpecification {
+  string key = 1 [(buf.validate.field).string.min_len = 1)];
+  optional string value = 2;
+}
+
+// Composite specification operations
+message CompositeSpecification {
+  SpecificationOperator operator = 1 [(buf.validate.field).enum.defined_only = true];
+  repeated MetaphorSpecification specifications = 2 [(buf.validate.field).repeated.min_items = 1)];
+}
+
+enum SpecificationOperator {
+  OPERATOR_UNSPECIFIED = 0;
+  OPERATOR_AND = 1;  // All specifications must be satisfied
+  OPERATOR_OR = 2;   // At least one specification must be satisfied
+  OPERATOR_NOT = 3;  // Specification must not be satisfied
+}
+
+// Service request/response messages
+message EvaluateSpecificationRequest {
+  string specification_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  metaphor.domain.entity.Metaphor metaphor = 2 [(buf.validate.field).required = true];
+  map<string, string> parameters = 3;
+}
+
+message EvaluateSpecificationResponse {
+  bool satisfied = 1;
+  string specification_name = 2;
+  string message = 3;
+  map<string, string> details = 4;
+  google.protobuf.Timestamp evaluated_at = 5;
+}
+
+message EvaluateSpecificationBatchRequest {
+  string specification_id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  repeated metaphor.domain.entity.Metaphor metaphors = 2 [(buf.validate.field).repeated.min_items = 1, (buf.validate.field).repeated.max_items = 100)];
+  map<string, string> parameters = 3;
+}
+
+message EvaluateSpecificationBatchResponse {
+  repeated EvaluateSpecificationResult results = 1;
+  int32 satisfied_count = 2;
+  int32 unsatisfied_count = 3;
+  string specification_id = 4;
+}
+
+message EvaluateSpecificationResult {
+  string metaphor_id = 1;
+  bool satisfied = 2;
+  string message = 3;
+}
+
+message CreateSpecificationRequest {
+  string name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true)];
+  string description = 2;
+  string expression = 3 [(buf.validate.field).string.min_len = 1, (buf.validate.field).required = true)];
+  SpecificationType type = 4 [(buf.validate.field).enum.defined_only = true];
+  map<string, string> parameters = 5;
+  string created_by = 6;
+}
+
+message CreateSpecificationResponse {
+  MetaphorSpecification specification = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message UpdateSpecificationRequest {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  optional string name = 2 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 100)];
+  optional string description = 3;
+  optional string expression = 4;
+  optional SpecificationType type = 5;
+  map<string, string> parameters = 6;
+  bool active = 7;
+}
+
+message UpdateSpecificationResponse {
+  MetaphorSpecification specification = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message DeleteSpecificationRequest {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+  bool force = 2;
+}
+
+message DeleteSpecificationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ListSpecificationsRequest {
+  SpecificationType type = 1 [(buf.validate.field).enum.defined_only = true];
+  bool active_only = 2;
+  int32 page = 3 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 1000)];
+  int32 page_size = 4 [(buf.validate.field).int32.gte = 1, (buf.validate.field).int32.lte = 100)];
+}
+
+message ListSpecificationsResponse {
+  repeated MetaphorSpecification specifications = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+  int32 total_pages = 5;
+}
+
+message GetSpecificationByIdRequest {
+  string id = 1 [(buf.validate.field).string.uuid = true, (buf.validate.field).required = true)];
+}
+
+message GetSpecificationByIdResponse {
+  MetaphorSpecification specification = 1;
+  bool found = 2;
+}
+
+import "google/protobuf/timestamp.proto";

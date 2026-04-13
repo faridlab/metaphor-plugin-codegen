@@ -1,0 +1,60 @@
+# {{MODULE_NAME_PASCAL}} Module - Schema Index
+# Version: 2.0
+#
+# This is the main schema file that defines shared types and imports all models.
+# Run `metaphor schema generate {{MODULE_NAME}} --target all` to generate code.
+
+module: {{MODULE_NAME}}
+version: 2
+
+# Shared types available to all models in this module
+shared_types:
+  # Common audit fields for all entities
+  AuditFields:
+    created_at:
+      type: datetime
+      attributes: ["@default(now)"]
+    updated_at:
+      type: datetime
+      attributes: ["@updated_at"]
+    deleted_at: datetime?
+
+  # Standard timestamps
+  Timestamps:
+    created_at:
+      type: datetime
+      attributes: ["@default(now)"]
+    updated_at:
+      type: datetime
+      attributes: ["@updated_at"]
+    deleted_at: datetime?
+
+  # Actor tracking (who created/updated/deleted)
+  Actors:
+    created_by:
+      type: uuid?
+      attributes: ["@foreign_key(User.id)"]
+    updated_by:
+      type: uuid?
+      attributes: ["@foreign_key(User.id)"]
+    deleted_by:
+      type: uuid?
+      attributes: ["@foreign_key(User.id)"]
+
+  # Combines Timestamps + Actors into a single JSONB column
+  # When models use `extends: [Metadata]`, a single `metadata` JSONB column is created
+  # containing: created_at, updated_at, deleted_at, created_by, updated_by, deleted_by
+  # This reduces table columns and enables flexible querying with GIN index
+  Metadata: [Timestamps, Actors]
+
+# Module-level configuration
+config:
+  database: postgresql
+  soft_delete: true
+  audit: true
+  default_timestamps: true
+
+# Import all model files
+# Add your model files here:
+imports: []
+  # - example.model.yaml

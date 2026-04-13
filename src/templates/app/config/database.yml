@@ -1,0 +1,131 @@
+# Database Configuration
+# Laravel-inspired database settings for Metaphor Framework
+
+# Default database configuration
+default: postgres
+
+# Database connections
+connections:
+  # PostgreSQL Primary Database
+  postgres:
+    url: "${DATABASE_URL:postgresql://postgres:password@localhost:5432/bersihirdb}"
+    host: "${DB_HOST:localhost}"
+    port: "${DB_PORT:5432}"
+    database: "${DB_NAME:bersihirdb}"
+    username: "${DB_USER:root}"
+    password: "${DB_PASSWORD:password}"
+
+    # Connection pool settings
+    max_connections: "${DB_MAX_CONNECTIONS:20}"
+    min_connections: "${DB_MIN_CONNECTIONS:5}"
+    connect_timeout: "${DB_CONNECT_TIMEOUT:30}"
+    idle_timeout: "${DB_IDLE_TIMEOUT:600}"
+
+    # SSL settings
+    ssl_mode: "${DB_SSL_MODE:prefer}"
+    ssl_root_cert: "${DB_SSL_ROOT_CERT:}"
+
+    # PostgreSQL specific settings
+    statement_cache_size: "${DB_STATEMENT_CACHE_SIZE:100}"
+    prepare_statement_threshold: "${DB_PREPARE_STATEMENT_THRESHOLD:5}"
+
+  # MongoDB Secondary Database (for legacy modules)
+  mongodb:
+    url: "${MONGODB_URL:mongodb://root:password@localhost:27017}"
+    host: "${MONGO_HOST:localhost}"
+    port: "${MONGO_PORT:27017}"
+    database: "${MONGO_DB_NAME:metaphor_mongo}"
+    username: "${MONGO_USER:root}"
+    password: "${MONGO_PASSWORD:password}"
+
+    # MongoDB connection settings
+    max_pool_size: "${MONGO_MAX_POOL_SIZE:20}"
+    min_pool_size: "${MONGO_MIN_POOL_SIZE:5}"
+    max_idle_time: "${MONGO_MAX_IDLE_TIME:300}"
+
+    # Connection timeout settings
+    server_selection_timeout: "${MONGO_SERVER_SELECTION_TIMEOUT:30}"
+    socket_timeout: "${MONGO_SOCKET_TIMEOUT:100}"
+    connect_timeout: "${MONGO_CONNECT_TIMEOUT:30}"
+
+    # Replica set (if applicable)
+    replica_set: "${MONGO_REPLICA_SET:}"
+    read_preference: "${MONGO_READ_PREFERENCE:primary}"
+
+# Redis Cache Configuration
+redis:
+  url: "${REDIS_URL:redis://localhost:6379}"
+  host: "${REDIS_HOST:localhost}"
+  port: "${REDIS_PORT:6379}"
+  password: "${REDIS_PASSWORD:}"
+  database: "${REDIS_DB:0}"
+
+  # Connection pool settings
+  max_connections: "${REDIS_MAX_CONNECTIONS:20}"
+  min_connections: "${REDIS_MIN_CONNECTIONS:2}"
+
+  # Connection timeout settings
+  connection_timeout: "${REDIS_CONNECTION_TIMEOUT:10}"
+  command_timeout: "${REDIS_COMMAND_TIMEOUT:5}"
+
+  # Cluster settings (if applicable)
+  cluster_nodes: "${REDIS_CLUSTER_NODES:}"
+
+  # Sentinel settings (if applicable)
+  sentinel_hosts: "${REDIS_SENTINEL_HOSTS:}"
+  sentinel_service: "${REDIS_SENTINEL_SERVICE:master}"
+
+# Database health check settings
+health:
+  # Enable health checks for all configured databases
+  enabled: "${DB_HEALTH_ENABLED:true}"
+
+  # Health check intervals (in seconds)
+  check_interval: "${DB_HEALTH_CHECK_INTERVAL:60}"
+  timeout: "${DB_HEALTH_TIMEOUT:10}"
+
+  # Connection test settings
+  test_query: "${DB_HEALTH_TEST_QUERY:SELECT 1}"
+  max_failures: "${DB_HEALTH_MAX_FAILURES:3}"
+
+# Migration settings
+migrations:
+  # Enable automatic migrations on startup
+  auto_run: "${MIGRATIONS_AUTO_RUN:false}"
+
+  # Migration directory
+  directory: "${MIGRATIONS_DIR:migrations}"
+
+  # Migration table name
+  table_name: "${MIGRATIONS_TABLE:_schema_migrations}"
+
+  # Migration locking
+  lock_timeout: "${MIGRATIONS_LOCK_TIMEOUT:30}"
+
+# Logging settings
+logging:
+  # Enable query logging
+  enable_query_logging: "${DB_QUERY_LOGGING:true}"
+
+  # Log slow queries (in milliseconds)
+  slow_query_threshold: "${DB_SLOW_QUERY_THRESHOLD:1000}"
+
+  # Log level for database operations
+  log_level: "${DB_LOG_LEVEL:info}"  # trace, debug, info, warn, error
+
+# Connection retry settings
+retry:
+  # Enable connection retry on startup
+  enabled: "${DB_RETRY_ENABLED:true}"
+
+  # Maximum number of retry attempts
+  max_attempts: "${DB_RETRY_MAX_ATTEMPTS:10}"
+
+  # Initial delay between retries (in milliseconds)
+  initial_delay: "${DB_RETRY_INITIAL_DELAY:1000}"
+
+  # Maximum delay between retries (in milliseconds)
+  max_delay: "${DB_RETRY_MAX_DELAY:10000}"
+
+  # Backoff multiplier
+  backoff_multiplier: "${DB_RETRY_BACKOFF_MULTIPLIER:2}"
