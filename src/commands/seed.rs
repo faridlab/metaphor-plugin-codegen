@@ -187,7 +187,9 @@ pub async fn handle_command(action: &SeedAction) -> Result<()> {
 /// Get seeds directory path
 fn get_seeds_dir(module: Option<&str>, app: &str) -> std::path::PathBuf {
     match module {
-        Some(m) => Path::new("libs/modules").join(m).join("migrations/seeds"),
+        // Resolve via workspace manifest (metaphor.yaml) when available so seeds
+        // are discovered at the real module path, not the `libs/modules/` default.
+        Some(m) => super::migration::module_base_path(m).join("migrations/seeds"),
         None => Path::new("apps").join(app).join("migrations/seeds"),
     }
 }
@@ -550,7 +552,7 @@ async fn run_all_seeds(force: bool, format: SeedFormat) -> Result<()> {
 /// Get seeders directory path (for Rust seeders)
 fn get_seeders_dir(module: Option<&str>, app: &str) -> std::path::PathBuf {
     match module {
-        Some(m) => Path::new("libs/modules").join(m).join("migrations/seeders"),
+        Some(m) => super::migration::module_base_path(m).join("migrations/seeders"),
         None => Path::new("apps").join(app).join("migrations/seeders"),
     }
 }
@@ -1681,6 +1683,8 @@ mod tests {
     fn test_get_seeds_dir() {
         assert_eq!(get_seeds_dir(None, "metaphor"), Path::new("apps/metaphor/migrations/seeds"));
         assert_eq!(get_seeds_dir(None, "api"), Path::new("apps/api/migrations/seeds"));
+        // Module path is resolved via module_base_path(); without a metaphor.yaml
+        // in the test CWD it falls back to libs/modules/<name>.
         assert_eq!(get_seeds_dir(Some("sapiens"), "metaphor"), Path::new("libs/modules/sapiens/migrations/seeds"));
     }
 
