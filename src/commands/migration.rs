@@ -1178,7 +1178,7 @@ async fn run_migrations(module: &str, database_url: Option<&str>) -> Result<()> 
             .ok()
             .or_else(crate::utils::get_database_url)
             .ok_or_else(|| anyhow::anyhow!(
-                "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var, or configure database.url in apps/metaphor/config/application.yml"
+                "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var (or add it to .env), or configure database.url in config/application.yml"
             ))?,
     };
 
@@ -1521,7 +1521,7 @@ async fn run_seeders(module: &str, name: Option<&str>, force: bool, database_url
             .ok()
             .or_else(crate::utils::get_database_url)
             .ok_or_else(|| anyhow::anyhow!(
-                "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var, or configure database.url in apps/metaphor/config/application.yml"
+                "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var (or add it to .env), or configure database.url in config/application.yml"
             ))?,
     };
 
@@ -2382,8 +2382,8 @@ pub(crate) fn get_enabled_modules_from_app_config() -> Vec<String> {
 /// # Configuration Search Order
 /// 1. Command-line `--database-url` argument
 /// 2. `.env` file in project root (loads DATABASE_URL, POSTGRES_DB, etc.)
-/// 3. `apps/metaphor/config/application.yml`
-/// 4. `config/application.yml` (fallback)
+/// 3. `config/application.yml`
+/// 4. `apps/metaphor/config/application.yml` (legacy fallback)
 ///
 /// # Environment Variable Expansion
 /// Supports the format `${VAR:default}` where:
@@ -2399,7 +2399,7 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .or_else(crate::utils::get_database_url)
         .ok_or_else(|| anyhow::anyhow!(
-            "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var, or configure database.url in apps/metaphor/config/application.yml"
+            "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var (or add it to .env), or configure database.url in config/application.yml"
         ))?;
 
     println!("   🔗 Database: {}...",

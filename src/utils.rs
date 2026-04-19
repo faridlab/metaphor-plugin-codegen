@@ -24,8 +24,8 @@ static ENV_VAR_REGEX: Lazy<Regex> = Lazy::new(|| {
 ///
 /// # Configuration Search Order
 /// 1. `.env` file in project root (loads DATABASE_URL, POSTGRES_DB, etc.)
-/// 2. `apps/metaphor/config/application.yml`
-/// 3. `config/application.yml` (fallback)
+/// 2. `config/application.yml`
+/// 3. `apps/metaphor/config/application.yml` (legacy fallback)
 ///
 /// # Returns
 /// - `Some(String)` - Database URL if found in config
@@ -63,20 +63,22 @@ pub fn get_database_url() -> Option<String> {
         }
     }
 
-    // Try YAML config files
+    // Try YAML config files. Skip paths that don't exist or fail to parse —
+    // using `?` here would abort the whole function on the first miss.
     let app_config_paths = [
-        "apps/metaphor/config/application.yml",
         "config/application.yml",
+        "apps/metaphor/config/application.yml",
     ];
 
     for config_path in &app_config_paths {
-        let content = fs::read_to_string(config_path).ok()?;
-        let yaml: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
-
-        let database = yaml.get("database")?;
-        let db_config = database.as_mapping()?;
-        let url = db_config.get("url")?;
-        let url_str = url.as_str()?;
+        let Ok(content) = fs::read_to_string(config_path) else { continue };
+        let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&content) else { continue };
+        let Some(url_str) = yaml
+            .get("database")
+            .and_then(|d| d.as_mapping())
+            .and_then(|m| m.get("url"))
+            .and_then(|v| v.as_str())
+        else { continue };
 
         return Some(expand_env_vars(url_str));
     }
