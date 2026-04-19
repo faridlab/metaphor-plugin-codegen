@@ -238,6 +238,10 @@ impl From<&CliMigrationAction> for MigrationAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env from CWD (and walk up to find one) so users don't have to
+    // `source .env` before every run. Silent if no .env is found.
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
 
     if cli.verbose {
