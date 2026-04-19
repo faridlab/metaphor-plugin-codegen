@@ -196,8 +196,7 @@ async fn generate_all_migrations(module: &str, force: bool) -> Result<()> {
     );
 
     // Look for entity definitions in the module
-    let entity_models_path = Path::new("libs/modules")
-        .join(module)
+    let entity_models_path = module_base_path(module)
         .join("src/infrastructure/persistence/postgresql/entity_models.rs");
 
     if !entity_models_path.exists() {
@@ -688,10 +687,8 @@ COMMENT ON COLUMN {table_name}.deleted_at IS 'Soft delete timestamp (NULL if not
 /// Get migrations directory path for a module
 /// Supports both `migrations/postgres/` (preferred) and `migrations/` (legacy) structures
 fn get_migrations_dir(module: &str) -> std::path::PathBuf {
-    let postgres_dir = Path::new("libs/modules")
-        .join(module)
-        .join("migrations")
-        .join("postgres");
+    let base = module_base_path(module);
+    let postgres_dir = base.join("migrations").join("postgres");
 
     // Prefer postgres subdirectory if it has actual SQL files
     if postgres_dir.exists() {
@@ -706,9 +703,7 @@ fn get_migrations_dir(module: &str) -> std::path::PathBuf {
     }
 
     // Fall back to migrations/ directly (legacy structure or if postgres/ is empty)
-    Path::new("libs/modules")
-        .join(module)
-        .join("migrations")
+    base.join("migrations")
 }
 
 /// Get the next migration number based on existing files
@@ -793,8 +788,7 @@ async fn generate_alter_migration(entity: &str, module: &str, description: &str)
     let table_name = to_plural(&entity_snake);
 
     // Parse current entity fields from entity_models.rs
-    let entity_models_path = Path::new("libs/modules")
-        .join(module)
+    let entity_models_path = module_base_path(module)
         .join("src/infrastructure/persistence/postgresql/entity_models.rs");
 
     if !entity_models_path.exists() {
@@ -864,8 +858,7 @@ async fn diff_entity_migration(entity: &str, module: &str) -> Result<()> {
     let table_name = to_plural(&entity_snake);
 
     // Parse current entity fields
-    let entity_models_path = Path::new("libs/modules")
-        .join(module)
+    let entity_models_path = module_base_path(module)
         .join("src/infrastructure/persistence/postgresql/entity_models.rs");
 
     if !entity_models_path.exists() {
@@ -1150,7 +1143,7 @@ async fn run_migrations(module: &str, database_url: Option<&str>) -> Result<()> 
     );
 
     // Check both possible migration directories
-    let module_base = Path::new("libs/modules").join(module);
+    let module_base = module_base_path(module);
     let postgres_dir = module_base.join("migrations/postgres");
     let legacy_dir = module_base.join("migrations");
 
@@ -1532,7 +1525,7 @@ async fn run_seeders(module: &str, name: Option<&str>, force: bool, database_url
             ))?,
     };
 
-    let module_path = Path::new("libs/modules").join(module);
+    let module_path = module_base_path(module);
     let seeds_dir = module_path.join("migrations/seeds");
 
     // Check for SQL seed files first (preferred for simplicity)
@@ -1841,7 +1834,7 @@ async fn generate_sql_seeds(module: &str, force: bool) -> Result<()> {
         module.bright_yellow()
     );
 
-    let module_path = Path::new("libs/modules").join(module);
+    let module_path = module_base_path(module);
     let seeders_dir = module_path.join("migrations/seeders");
     let seeds_dir = module_path.join("migrations/seeds");
 
@@ -2251,19 +2244,76 @@ fn parse_struct_literal(item: &str) -> Vec<(String, String)> {
 // Run All Migrations (Multi-Module)
 // ============================================================================
 
-/// Discover all modules in libs/modules/ directory
-pub(crate) fn discover_modules() -> Result<Vec<String>> {
-    let modules_dir = Path::new("libs/modules");
+/// Locate `metaphor.yaml` by walking up from cwd. Returns the workspace root
+/// (directory containing the manifest) and the parsed `projects:` list as
+/// `(name, path)` pairs. Paths are absolute, resolved against the workspace root.
+fn read_workspace_projects() -> Option<(std::path::PathBuf, Vec<(String, std::path::PathBuf)>)> {
+    let start = std::env::current_dir().ok()?;
+    let mut dir: &Path = &start;
+    let manifest_path = loop {
+        let candidate = dir.join("metaphor.yaml");
+        if candidate.is_file() {
+            break candidate;
+        }
+        dir = dir.parent()?;
+    };
+    let workspace_root = manifest_path.parent()?.to_path_buf();
 
+    let content = fs::read_to_string(&manifest_path).ok()?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    let projects = yaml.get("projects")?.as_sequence()?;
+
+    let mut out = Vec::new();
+    for p in projects {
+        let name = p.get("name").and_then(|v| v.as_str())?.to_string();
+        let path = p.get("path").and_then(|v| v.as_str())?;
+        out.push((name, workspace_root.join(path)));
+    }
+    Some((workspace_root, out))
+}
+
+/// Resolve the base directory for `module`. Prefers a project entry in
+/// `metaphor.yaml` whose `name` matches; falls back to `libs/modules/<module>`
+/// (legacy layout) so pre-workspace callers keep working.
+pub(crate) fn module_base_path(module: &str) -> std::path::PathBuf {
+    if let Some((_, projects)) = read_workspace_projects() {
+        if let Some((_, path)) = projects.into_iter().find(|(name, _)| name == module) {
+            return path;
+        }
+    }
+    Path::new("libs/modules").join(module)
+}
+
+/// Discover all modules that have a `migrations/` directory.
+///
+/// Strategy:
+/// 1. If `metaphor.yaml` is present, iterate its `projects:` and return any
+///    whose resolved path contains `migrations/` or `migrations/postgres/`.
+///    This is the modern path — source of truth is the workspace manifest.
+/// 2. Otherwise fall back to scanning `libs/modules/` and filtering against
+///    `config/application.yml` `modules:` section (legacy behavior).
+pub(crate) fn discover_modules() -> Result<Vec<String>> {
+    if let Some((_, projects)) = read_workspace_projects() {
+        let mut modules: Vec<String> = projects
+            .into_iter()
+            .filter(|(_, path)| {
+                path.join("migrations/postgres").exists() || path.join("migrations").exists()
+            })
+            .map(|(name, _)| name)
+            .collect();
+        modules.sort();
+        return Ok(modules);
+    }
+
+    let modules_dir = Path::new("libs/modules");
     if !modules_dir.exists() {
         return Ok(Vec::new());
     }
 
-    // Load app config to get enabled modules
+    // Legacy layout: scan libs/modules/ and filter by enabled modules from app config
     let enabled_modules = get_enabled_modules_from_app_config();
 
     let mut modules = Vec::new();
-
     for entry in fs::read_dir(modules_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -2271,12 +2321,10 @@ pub(crate) fn discover_modules() -> Result<Vec<String>> {
         if path.is_dir() {
             let module_name = entry.file_name().to_string_lossy().to_string();
 
-            // Skip if not enabled in app config
             if !enabled_modules.contains(&module_name) {
                 continue;
             }
 
-            // Check if it has a migrations directory
             let migrations_postgres = path.join("migrations/postgres");
             let migrations_dir = path.join("migrations");
 
@@ -2286,9 +2334,7 @@ pub(crate) fn discover_modules() -> Result<Vec<String>> {
         }
     }
 
-    // Sort modules alphabetically (in future, could do dependency order)
     modules.sort();
-
     Ok(modules)
 }
 
@@ -2365,7 +2411,7 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
     let modules = discover_modules()?;
 
     if modules.is_empty() {
-        println!("   ⚠️  No modules with migrations found in libs/modules/");
+        println!("   ⚠️  No projects with migrations found (checked metaphor.yaml projects and libs/modules/)");
         return Ok(());
     }
 
