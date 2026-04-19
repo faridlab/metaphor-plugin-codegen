@@ -13,6 +13,7 @@ use metaphor_codegen::commands::{
     migration::MigrationAction,
     module::ModuleAction,
     proto::ProtoAction,
+    routes::RoutesArgs,
     seed::SeedAction,
 };
 
@@ -64,6 +65,9 @@ enum Command {
         #[command(subcommand)]
         action: SeedAction,
     },
+
+    /// List HTTP routes defined in the project
+    Routes(RoutesArgs),
 }
 
 // Module action needs CLI-level clap definitions that map to the handler's ModuleAction
@@ -264,5 +268,6 @@ async fn main() -> Result<()> {
             metaphor_codegen::commands::migration::handle_command(&migration_action).await
         }
         Command::Seed { action } => metaphor_codegen::commands::seed::handle_command(action).await,
+        Command::Routes(args) => metaphor_codegen::commands::routes::handle_command(args).await,
     }
 }
