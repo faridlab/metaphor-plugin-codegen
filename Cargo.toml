@@ -1,6 +1,6 @@
 [package]
 name = "metaphor-plugin-codegen"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Code generation plugin for Metaphor CLI (make, module, apps, proto, migration, seed)"
 authors = ["Farid Hidayat"]
