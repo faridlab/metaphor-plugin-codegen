@@ -684,26 +684,32 @@ COMMENT ON COLUMN {table_name}.deleted_at IS 'Soft delete timestamp (NULL if not
     )
 }
 
-/// Get migrations directory path for a module
-/// Supports both `migrations/postgres/` (preferred) and `migrations/` (legacy) structures
+/// Get migrations directory path for a module.
+///
+/// Prefers top-level `migrations/` because that's where `metaphor-plugin-schema`
+/// emits. Falls back to `migrations/postgres/` for legacy per-backend layouts.
+/// The preference must match `run_migrations()`'s directory selection logic.
 fn get_migrations_dir(module: &str) -> std::path::PathBuf {
     let base = module_base_path(module);
-    let postgres_dir = base.join("migrations").join("postgres");
+    let root_dir = base.join("migrations");
+    let postgres_dir = root_dir.join("postgres");
 
-    // Prefer postgres subdirectory if it has actual SQL files
-    if postgres_dir.exists() {
-        let has_sql_files = fs::read_dir(&postgres_dir)
+    let has_sql_files = |dir: &Path| -> bool {
+        fs::read_dir(dir)
             .map(|entries| entries.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
                 .any(|e| e.path().extension().map_or(false, |ext| ext == "sql")))
-            .unwrap_or(false);
+            .unwrap_or(false)
+    };
 
-        if has_sql_files {
-            return postgres_dir;
-        }
+    if root_dir.exists() && has_sql_files(&root_dir) {
+        return root_dir;
     }
-
-    // Fall back to migrations/ directly (legacy structure or if postgres/ is empty)
-    base.join("migrations")
+    if postgres_dir.exists() && has_sql_files(&postgres_dir) {
+        return postgres_dir;
+    }
+    // Neither has files — return root so callers get a sensible "not found" path.
+    root_dir
 }
 
 /// Get the next migration number based on existing files
@@ -1142,32 +1148,37 @@ async fn run_migrations(module: &str, database_url: Option<&str>) -> Result<()> 
         module.bright_yellow()
     );
 
-    // Check both possible migration directories
+    // Check both possible migration directories.
+    // The schema generator (metaphor-plugin-schema) emits to top-level `migrations/`,
+    // so that's preferred. `migrations/postgres/` is a legacy per-backend layout kept
+    // as a fallback for projects that still use it.
     let module_base = module_base_path(module);
+    let root_dir = module_base.join("migrations");
     let postgres_dir = module_base.join("migrations/postgres");
-    let legacy_dir = module_base.join("migrations");
 
-    // Helper to check if directory has SQL files
+    // Helper to check if directory has top-level SQL files (non-recursive).
     let has_sql_files = |dir: &Path| -> bool {
         if !dir.exists() {
             return false;
         }
         fs::read_dir(dir)
             .map(|entries| entries.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
                 .any(|e| e.path().extension().map_or(false, |ext| ext == "sql")))
             .unwrap_or(false)
     };
 
-    // Prefer postgres/ if it has actual SQL files, otherwise fall back to migrations/
-    let migrations_dir = if has_sql_files(&postgres_dir) {
+    // Prefer `migrations/` (top-level) when it has SQL files, since that's where
+    // the schema generator emits. Fall back to `migrations/postgres/` for legacy.
+    let migrations_dir = if has_sql_files(&root_dir) {
+        root_dir
+    } else if has_sql_files(&postgres_dir) {
         postgres_dir
-    } else if has_sql_files(&legacy_dir) {
-        legacy_dir
     } else {
         return Err(anyhow::anyhow!(
             "No SQL migration files found at:\n  - {}\n  - {}\nRun 'metaphor migration generate' first.",
-            postgres_dir.display(),
-            legacy_dir.display()
+            root_dir.display(),
+            postgres_dir.display()
         ));
     };
 
