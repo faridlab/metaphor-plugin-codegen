@@ -13,7 +13,6 @@ use colored::*;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use crate::templates::template_processor::{TemplateContext, copy_and_process_template_dir, get_module_template_dir};
 
 /// Module action enum for command handling
 #[derive(Debug, Clone)]
@@ -58,53 +57,103 @@ pub async fn handle_command(action: &ModuleAction) -> Result<()> {
 }
 
 /// Create a new module with standard structure using templates
-async fn create_module(name: &str, author: &str, description: Option<&str>) -> Result<()> {
-    println!("🏗️  {} bounded context module: {}", "Creating".bright_green(), name.bright_cyan());
+/// The canonical module skeleton. `metaphor module create` clones this and renames it —
+/// backbone-module is the single source of truth for module structure.
+const SKELETON_REPO: &str = "https://github.com/faridlab/backbone-module";
 
-    // Module structure follows FINAL_ARCHITECTURE_DECISIONS.md:
-    // libs/modules/{module}/ (bounded contexts - complete domain ownership)
-    let module_path = Path::new("libs").join("modules").join(name);
+async fn create_module(name: &str, _author: &str, description: Option<&str>) -> Result<()> {
+    println!("🏗️  {} module: {}", "Creating".bright_green(), name.bright_cyan());
 
-    // Check if module already exists
+    // Modules live at the workspace root (e.g. ./backbone-accounting), one project per repo.
+    let module_path = Path::new(name);
     if module_path.exists() {
-        return Err(anyhow::anyhow!("Module '{}' already exists at libs/modules/{}", name, name));
+        return Err(anyhow::anyhow!("'{}' already exists in this directory", name));
     }
 
-    // Create libs/modules directory if it doesn't exist
-    if !Path::new("libs/modules").exists() {
-        fs::create_dir_all("libs/modules")?;
-        println!("📁 Created libs/modules/ directory for bounded contexts");
-    }
-
-    // Create template context
-    let context = TemplateContext::new(name, author, description);
-
-    // Get template directory
-    let template_dir = get_module_template_dir();
-    if !template_dir.exists() {
+    // Scaffold by cloning the canonical skeleton project from GitHub (shallow).
+    println!("📥 Cloning skeleton from {}", SKELETON_REPO.cyan());
+    let status = Command::new("git")
+        .args(["clone", "--depth", "1", SKELETON_REPO, name])
+        .status()
+        .context("failed to run `git clone` (is git installed and on PATH?)")?;
+    if !status.success() {
         return Err(anyhow::anyhow!(
-            "Template directory not found at: {:?}. Please ensure templates are available.",
-            template_dir
+            "git clone of {} failed — ensure the repo is reachable and you have access.",
+            SKELETON_REPO
         ));
     }
 
-    // Process and copy template files
-    copy_and_process_template_dir(&template_dir, &module_path, &context)?;
+    // Detach from the skeleton repo: this is a fresh module, not a fork. Drop the lockfile too
+    // so dependencies resolve fresh under the new package name.
+    let _ = fs::remove_dir_all(module_path.join(".git"));
+    let _ = fs::remove_file(module_path.join("Cargo.lock"));
 
-    println!("✅ Bounded context module '{}' created successfully!", name.bright_green());
+    // Rename the package and set the description in Cargo.toml.
+    let cargo_path = module_path.join("Cargo.toml");
+    let cargo = fs::read_to_string(&cargo_path)
+        .with_context(|| format!("reading {}", cargo_path.display()))?;
+    let mut out = cargo.replace("backbone-module-skeleton", name);
+    if let Some(desc) = description {
+        out = out.replace("Minimal Backbone Framework module skeleton", desc);
+    }
+    fs::write(&cargo_path, out)?;
+
+    // Stamp the schema-module name into the skeleton's spec files. The Cargo package is e.g.
+    // `backbone-organization`; the schema module (and its dedicated Postgres schema) is
+    // `organization` — the Cargo name minus the conventional `backbone-` prefix.
+    let schema_module = name.strip_prefix("backbone-").unwrap_or(name);
+    let stamped = replace_token_in_tree(module_path, "__MODULE__", schema_module)
+        .context("stamping module name into skeleton spec files")?;
+    println!(
+        "🔖 Stamped module '{}' (own Postgres schema: {}) into {} skeleton file(s)",
+        schema_module.cyan(),
+        schema_module.cyan(),
+        stamped
+    );
+
+    println!("✅ Module '{}' created from the backbone-module skeleton", name.bright_green());
     println!("📁 Location: {}", module_path.display().to_string().cyan());
     println!();
     println!("📋 Next steps:");
-    println!("   1. {} entity schema: {}", "Define".bright_yellow(), format!("libs/modules/{}/schema/models/<entity>.model.yaml", name).cyan());
-    println!("   2. {} code: {}", "Generate".bright_yellow(), format!("metaphor schema generate {} --target all", name).cyan());
-    println!("   3. {} migrations: {}", "Run".bright_yellow(), "sqlx migrate run".cyan());
-    println!("   4. {} development: {}", "Start".bright_yellow(), "metaphor dev:serve".cyan());
-    println!();
-    println!("🏛️  This is a DDD Bounded Context with schema-first approach!");
-    println!("    📋 Schema definitions: libs/modules/{}/schema/", name);
-    println!("    🔗 Single source of truth for this bounded context");
+    println!("   1. Register in {} (name / type: module / path: ./{})", "metaphor.yaml".cyan(), name);
+    println!("   2. Replace {} with your entities (update {} imports)",
+        format!("{}/schema/models/example.model.yaml", name).cyan(),
+        "index.model.yaml".cyan());
+    println!("   3. {}", format!("metaphor schema generate {}", name).cyan());
+    println!("   4. Create + run migrations, then {}", "metaphor dev test".cyan());
 
     Ok(())
+}
+
+/// Recursively replace `token` with `value` in every UTF-8 text file under `root`.
+/// Skips `.git`, `target`, and any file that isn't valid UTF-8 (e.g. binaries). Returns the
+/// number of files changed. Used to stamp `__MODULE__` into the cloned skeleton's spec files.
+fn replace_token_in_tree(root: &Path, token: &str, value: &str) -> Result<usize> {
+    let mut changed = 0;
+    for entry in fs::read_dir(root)
+        .with_context(|| format!("reading dir {}", root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            let name = entry.file_name();
+            if name == ".git" || name == "target" {
+                continue;
+            }
+            changed += replace_token_in_tree(&path, token, value)?;
+        } else if file_type.is_file() {
+            // Only rewrite files that are valid UTF-8 and actually contain the token.
+            if let Ok(content) = fs::read_to_string(&path) {
+                if content.contains(token) {
+                    fs::write(&path, content.replace(token, value))
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    changed += 1;
+                }
+            }
+        }
+    }
+    Ok(changed)
 }
 
 /// List all available modules
