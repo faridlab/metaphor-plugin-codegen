@@ -19,21 +19,33 @@ A module owns its entire vertical slice: from domain logic through database pers
 
 Each module follows Clean Architecture with four layers. Dependencies point inward -- outer layers depend on inner layers, never the reverse.
 
+```mermaid
+flowchart TB
+    subgraph P["Presentation — src/presentation/"]
+        P1["HTTP handlers · gRPC · CLI"]
+    end
+    subgraph I["Infrastructure — src/infrastructure/"]
+        I1["DB repositories · cache · messaging"]
+    end
+    subgraph A["Application — src/application/"]
+        A1["Commands · queries · use cases (CQRS)"]
+    end
+    subgraph D["Domain — src/domain/ (no external deps)"]
+        D1["Entities · value objects · events · repo traits · specs"]
+    end
+
+    P -->|depends on| A
+    P -->|depends on| D
+    I -->|implements traits from| D
+    A -->|depends on| D
+
+    classDef domain fill:#8957e5,color:#fff,stroke:#6e40c9
+    class D domain
 ```
-┌─────────────────────────────────────────────┐
-│              Presentation Layer              │  HTTP handlers, gRPC, CLI
-│           src/presentation/                  │
-├─────────────────────────────────────────────┤
-│             Infrastructure Layer             │  Database, cache, messaging
-│           src/infrastructure/                │
-├─────────────────────────────────────────────┤
-│              Application Layer               │  Commands, queries, use cases
-│             src/application/                 │
-├─────────────────────────────────────────────┤
-│                Domain Layer                  │  Entities, value objects, events
-│               src/domain/                    │  (no external dependencies)
-└─────────────────────────────────────────────┘
-```
+
+*Caption — what to notice:* every arrow points **inward** toward the domain, and the domain (purple)
+points at nothing. Infrastructure depends on the domain only to *implement its traits* — the
+dependency-inversion that lets you swap a database without touching business rules.
 
 ### Domain Layer (`src/domain/`)
 

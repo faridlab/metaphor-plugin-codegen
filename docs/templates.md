@@ -1,6 +1,14 @@
 # Template System
 
-The plugin uses two template processing mechanisms to generate code: **simple placeholder replacement** for `make` commands and **Handlebars-based processing** for `apps` and `module` commands.
+> ⚠️ **Accuracy note (v0.1.8):** `module create` **no longer uses local templates**. It clones the
+> external `backbone-module` skeleton repo and stamps names in — see
+> [ADR-0002](adr/0002-skeleton-clone-scaffolding.md) and the
+> [Maintainer guide](maintainer-guide.md#how-templating-actually-works). The sections below apply to
+> the **`make`** targets (string replacement) and **`apps`** (Handlebars); references to `module`
+> using templates are legacy. The `template_processor.rs` path helpers are dead code.
+
+The plugin uses two local template mechanisms: **simple placeholder replacement** for `make`
+commands and **Handlebars-based processing** for `apps`.
 
 ---
 

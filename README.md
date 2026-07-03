@@ -2,7 +2,10 @@
 
 Code generation and scaffolding plugin for the [Metaphor Framework](https://github.com/faridlab/metaphor-plugin-codegen). Generates boilerplate code following **Domain-Driven Design (DDD)** and **Clean Architecture** principles.
 
-**Binary:** `metaphor-codegen` | **Version:** 0.1.0 | **License:** MIT
+**Binary:** `metaphor-codegen` | **Version:** 0.1.8 | **License:** MIT
+
+> 📖 New here? Start with the **[Handbook](docs/index.md)** — philosophy, architecture, and guides
+> for evaluators, app developers, maintainers, and contributors.
 
 ## Installation
 
@@ -45,6 +48,7 @@ metaphor-codegen migration run --module payments
 | `proto` | 2 | Protocol Buffer operations | [commands-proto.md](docs/commands-proto.md) |
 | `migration` | 10 | PostgreSQL migration lifecycle | [commands-migration.md](docs/commands-migration.md) |
 | `seed` | 7 | Database seeding and test data | [commands-seed.md](docs/commands-seed.md) |
+| `routes` | — | List HTTP routes discovered in a project (table/list/json/markdown) | [commands-routes.md](docs/commands-routes.md) |
 
 ## Global Flags
 
