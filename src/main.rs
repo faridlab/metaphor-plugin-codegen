@@ -177,6 +177,14 @@ enum CliMigrationAction {
     RunAll {
         #[arg(long)]
         database_url: Option<String>,
+        /// Deployment env (e.g. `prod`) from metaphor.deploy.yaml. When set, migrations run
+        /// REMOTELY on that env's stack over SSH (via `metaphor deploy migrate <env>`), with a
+        /// production confirmation gate — instead of against the local database.
+        #[arg(long)]
+        target: Option<String>,
+        /// Skip the interactive production confirmation (CI). Only meaningful with --target.
+        #[arg(long)]
+        yes: bool,
     },
     /// Show migration status for all modules
     Status {
@@ -224,8 +232,10 @@ impl From<&CliMigrationAction> for MigrationAction {
             CliMigrationAction::Run { module, database_url } => MigrationAction::Run {
                 module: module.clone(), database_url: database_url.clone(),
             },
-            CliMigrationAction::RunAll { database_url } => MigrationAction::RunAll {
+            CliMigrationAction::RunAll { database_url, target, yes } => MigrationAction::RunAll {
                 database_url: database_url.clone(),
+                target: target.clone(),
+                yes: *yes,
             },
             CliMigrationAction::Status { module, database_url } => MigrationAction::Status {
                 module: module.clone(), database_url: database_url.clone(),

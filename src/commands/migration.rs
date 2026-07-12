@@ -100,6 +100,12 @@ pub enum MigrationAction {
     RunAll {
         /// Database URL (defaults to DATABASE_URL env var)
         database_url: Option<String>,
+        /// Deployment env from metaphor.deploy.yaml (e.g. `prod`). When set, migrations
+        /// run REMOTELY on that env's stack over SSH (via `metaphor deploy migrate <env>`),
+        /// with a confirmation gate — instead of against the local database.
+        target: Option<String>,
+        /// Skip the interactive production confirmation (CI). Only meaningful with --target.
+        yes: bool,
     },
     /// Show migration status for all modules
     Status {
@@ -137,8 +143,15 @@ pub async fn handle_command(action: &MigrationAction) -> Result<()> {
         MigrationAction::GenerateSeeds { module, force } => {
             generate_sql_seeds(module, *force).await
         }
-        MigrationAction::RunAll { database_url } => {
-            run_all_migrations(database_url.as_deref()).await
+        MigrationAction::RunAll { database_url, target, yes } => {
+            match target {
+                // Remote env: hand off to `metaphor deploy migrate <env>`, which runs the
+                // env's `migrations` compose service over SSH with a confirmation gate.
+                // Migrations belong to modules; a service composes them and runs them against
+                // its ONE database — so a remote run is per-service and lives in the deploy plugin.
+                Some(env) => run_all_migrations_remote(env, *yes),
+                None => run_all_migrations(database_url.as_deref()).await,
+            }
         }
         MigrationAction::Status { module, database_url } => {
             show_migration_status(module.as_deref(), database_url.as_deref()).await
@@ -2400,6 +2413,41 @@ pub(crate) fn get_enabled_modules_from_app_config() -> Vec<String> {
 /// Supports the format `${VAR:default}` where:
 /// - `VAR` is the environment variable name
 /// - `default` is the optional fallback value if VAR is not set
+/// Run migrations against a remote deployment env by delegating to `metaphor deploy migrate <env>`.
+///
+/// The deploy plugin owns SSH + `metaphor.deploy.yaml` resolution and runs the env's `migrations`
+/// compose service on the host; it enforces the production confirmation gate (type the env name),
+/// which `--yes` bypasses for CI. We shell out to the `metaphor` umbrella so plugin discovery,
+/// `metaphor.deploy.yaml` location, and the gate all stay in one place rather than duplicated here.
+fn run_all_migrations_remote(env: &str, yes: bool) -> Result<()> {
+    use anyhow::{bail, Context};
+
+    println!(
+        "🌐 {} migrations on remote env '{}' (via metaphor deploy migrate)",
+        "Delegating".bright_cyan().bold(),
+        env.bright_white().bold()
+    );
+
+    let mut cmd = std::process::Command::new("metaphor");
+    cmd.arg("deploy").arg("migrate").arg(env);
+    if yes {
+        cmd.arg("--yes");
+    }
+    // Inherit stdio so the confirmation prompt + remote output stream straight through.
+    let status = cmd
+        .status()
+        .context("failed to invoke `metaphor deploy migrate` — is `metaphor` on PATH?")?;
+
+    if !status.success() {
+        bail!(
+            "remote migration failed (metaphor deploy migrate {} exited with {})",
+            env,
+            status
+        );
+    }
+    Ok(())
+}
+
 pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
     println!("🚀 {} Running migrations for ALL modules...", "Starting".bright_cyan().bold());
     println!();
