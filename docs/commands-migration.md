@@ -239,6 +239,8 @@ Run pending migrations for **all** registered modules.
 | Argument | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `--database-url` | No | auto | Database URL (falls back to config) |
+| `--target` | No | -- | Deployment env (e.g. `prod`) from `metaphor.deploy.yaml`. Runs migrations **remotely** over SSH instead of locally |
+| `--yes` | No | `false` | Skip the interactive production confirmation. Only meaningful with `--target` (for CI) |
 
 ```bash
 metaphor-codegen migration run-all
@@ -248,6 +250,28 @@ metaphor-codegen migration run-all --database-url "postgresql://user:pass@localh
 ```
 
 Discovers all modules under `libs/modules/` that have migration directories and runs their pending migrations in module name order.
+
+### Running against a remote env (`--target`)
+
+When `--target <env>` is set, `run-all` does **not** touch a local database. Instead it delegates to
+`metaphor deploy migrate <env>`, which runs that env's `migrations` compose service on the remote host
+over SSH:
+
+```bash
+# Run migrations on the prod stack over SSH (prompts for confirmation)
+metaphor-codegen migration run-all --target prod
+
+# Non-interactive (CI): skip the confirmation gate
+metaphor-codegen migration run-all --target prod --yes
+```
+
+The deploy plugin owns SSH access, `metaphor.deploy.yaml` resolution, and the **production
+confirmation gate** (you type the env name to proceed). `--yes` bypasses that gate for automated
+pipelines. Because this shells out to the `metaphor` umbrella, `metaphor` must be on `PATH`.
+
+> **Note:** migrations belong to modules, but a *remote* run is per-service — a service composes its
+> modules' migrations and runs them against its one database. That is why the remote path lives in the
+> deploy plugin rather than being duplicated here.
 
 ---
 

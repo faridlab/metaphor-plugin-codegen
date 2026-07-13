@@ -95,5 +95,6 @@ downstream of:
 - `src/templates/` and the `backbone-module` skeleton repo — what gets generated.
 - `Cargo.toml` — dependencies, version, binary/lib split.
 - Workspace `metaphor.yaml` — where generated modules get registered.
+- [`CHANGELOG.md`](../CHANGELOG.md) — what changed between versions.
 
-*Handbook version: tracks `metaphor-codegen` 0.1.8. Last reconciled against code 2026-07-03.*
+*Handbook version: tracks `metaphor-codegen` 0.1.8. Last reconciled against code 2026-07-13.*
