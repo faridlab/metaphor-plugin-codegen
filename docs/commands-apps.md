@@ -1,12 +1,19 @@
 # Apps Commands
 
-Application generation commands for creating new Metaphor Framework applications from templates. Each generated app follows **Clean Architecture** with pre-configured routing, middleware, and configuration.
+Application generation commands for creating new Metaphor Framework applications. Each generated app is scaffolded from the canonical **`backbone-application`** skeleton and follows **Clean Architecture** with pre-configured routing, middleware, and configuration.
+
+> **How generation works (v0.2.0):** `apps generate` **clones** the
+> [`backbone-application`](https://github.com/faridlab/backbone-application) skeleton repo and stamps
+> the app name in — it no longer expands local Handlebars templates. The skeleton repo is the single
+> source of truth for app/service structure. This requires `git` on PATH and network access, and
+> **fails offline**. See [ADR-0002](adr/0002-skeleton-clone-scaffolding.md) for the rationale (the
+> same decision that governs `module`).
 
 ---
 
 ## apps generate
 
-Generate a new Metaphor Framework application from a template.
+Generate a new Metaphor Framework application by cloning the `backbone-application` skeleton.
 
 | Argument | Required | Default | Description |
 |----------|:--------:|---------|-------------|
@@ -20,6 +27,11 @@ Generate a new Metaphor Framework application from a template.
 | `-o`, `--output` | No | `apps` | Output directory |
 | `--author` | No | -- | Author name |
 | `--email` | No | -- | Author email |
+
+> **Note:** since generation now clones a fixed skeleton, only `name` and `--output` change the files
+> written to disk. The `--app-type`, `--port`, `--database`, `--auth`, and `--metrics` flags are still
+> validated and shown in the configuration summary, but no longer alter the generated app — tune those
+> in the generated project's config after scaffolding.
 
 ```bash
 # Basic API service
@@ -54,9 +66,13 @@ metaphor-codegen apps generate cron-jobs --app-type scheduler --output services
 
 ### Generated App Structure
 
+The layout is whatever the [`backbone-application`](https://github.com/faridlab/backbone-application)
+skeleton currently ships — read that repo for the authoritative structure. At the time of writing it
+is a Clean Architecture app roughly shaped like:
+
 ```
 apps/<name>/
-  Cargo.toml                       # Crate manifest
+  Cargo.toml                       # Crate manifest (package renamed to <name>)
   docker-compose.yml               # Docker setup
   README.md                        # App documentation
   config/                          # Configuration files
@@ -73,9 +89,21 @@ apps/<name>/
     presentation/                  # Presentation layer
 ```
 
+The generator detaches the clone from the skeleton (removes `.git` and `Cargo.lock`) and stamps the
+skeleton's baked-in package name — `backbone-app` (kebab) and `backbone_app` (snake) — to your app
+name across every UTF-8 text file (Cargo.toml, `src/main.rs`, Dockerfiles, config, deployment).
+
 ### Workspace Integration
 
-After generation, the app is automatically added to the workspace `Cargo.toml` members list. The generator searches upward for the workspace root (a `Cargo.toml` containing `[workspace]`).
+The generator **no longer edits the workspace `Cargo.toml`**. After scaffolding, register the app in
+`metaphor.yaml` yourself:
+
+```yaml
+# metaphor.yaml
+projects:
+  - name: my-service
+    type: backend-service
+```
 
 ### Configuration Summary
 
@@ -97,6 +125,7 @@ Configuration:
 ### Next Steps After Generation
 
 ```bash
+# 1. Register the app in metaphor.yaml (name: my-service / type: backend-service)
 cd apps/my-service
 cargo build           # Build the application
 cargo run             # Start the application
@@ -166,46 +195,24 @@ Validation failed: My-Service: App name must contain only lowercase letters, num
 
 ---
 
-## Handlebars Template Helpers
+## Name Stamping
 
-The app generator uses Handlebars for template processing and registers these helpers:
+The generator does not use a template engine. It replaces the skeleton's literal package name with
+your app name across every UTF-8 text file in the clone:
 
-| Helper | Input | Output |
-|--------|-------|--------|
-| `pascal_case` | `my-service` | `MyService` |
-| `snake_case` | `my-service` | `my_service` |
-| `kebab_case` | `my_service` | `my-service` |
-| `camel_case` | `my-service` | `myService` |
-| `upper_case` | `my-service` | `MY_SERVICE` |
-| `title_case` | `my-service` | `My Service` |
+| Skeleton token | Replaced with | Example (`my-service`) |
+|----------------|---------------|------------------------|
+| `backbone-app` (kebab) | your app name | `my-service` |
+| `backbone_app` (snake) | snake_cased app name | `my_service` |
 
-These helpers can be used in template files as `{{pascal_case APP_NAME}}`.
-
-### Template Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `APP_NAME` | Original app name | `my-service` |
-| `APP_NAME_PASCAL` | PascalCase | `MyService` |
-| `APP_NAME_SNAKE` | snake_case | `my_service` |
-| `APP_NAME_KEBAB` | kebab-case | `my-service` |
-| `APP_NAME_CAMEL` | camelCase | `myService` |
-| `APP_PORT` | Server port | `3000` |
-| `DATABASE_TYPE` | Database type | `postgresql` |
-| `DATABASE_NAME` | Database name | `my_service_db` |
-| `AUTH_ENABLED` | Auth flag | `true`/`false` |
-| `METRICS_ENABLED` | Metrics flag | `true`/`false` |
-| `IS_WORKER` | Worker type flag | `true`/`false` |
-| `IS_SCHEDULER` | Scheduler type flag | `true`/`false` |
-| `CREATION_DATE` | Generation date | `2026-04-14` |
-| `CREATION_DATETIME` | Generation timestamp | `2026-04-14 12:00:00` |
-| `AUTHOR_NAME` | Author name | `Developer` |
-| `AUTHOR_EMAIL` | Author email | `dev@example.com` |
+Everything else — layout, dependencies, config keys, Clean Architecture layers — comes verbatim from
+the skeleton. To change the generated shape, edit the `backbone-application` repo, not this plugin.
 
 ---
 
 ## See Also
 
 - [Architecture & Concepts](architecture.md) -- Clean Architecture layers
-- [Template System](templates.md) -- Handlebars template processing details
+- [Template System](templates.md) -- how `make`/`module`/`apps` generation works
+- [ADR-0002](adr/0002-skeleton-clone-scaffolding.md) -- why scaffolding clones a skeleton repo
 - [Configuration](configuration.md) -- Database and environment configuration

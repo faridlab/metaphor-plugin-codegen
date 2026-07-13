@@ -1,14 +1,15 @@
 # Template System
 
-> ⚠️ **Accuracy note (v0.1.8):** `module create` **no longer uses local templates**. It clones the
-> external `backbone-module` skeleton repo and stamps names in — see
-> [ADR-0002](adr/0002-skeleton-clone-scaffolding.md) and the
-> [Maintainer guide](maintainer-guide.md#how-templating-actually-works). The sections below apply to
-> the **`make`** targets (string replacement) and **`apps`** (Handlebars); references to `module`
-> using templates are legacy. The `template_processor.rs` path helpers are dead code.
+> ⚠️ **Accuracy note (v0.2.0):** both `module create` and `apps generate` **no longer use local
+> templates**. They clone an external skeleton repo (`backbone-module` / `backbone-application`
+> respectively) and stamp names in — see [ADR-0002](adr/0002-skeleton-clone-scaffolding.md) and the
+> [Maintainer guide](maintainer-guide.md#how-templating-actually-works). Only the **`make`** targets
+> still use local templates (string replacement). References below to `module` or `apps` using local
+> templates / Handlebars are legacy; the `src/templates/app/` tree, the Handlebars helpers, and the
+> `template_processor.rs` path helpers are dead code.
 
-The plugin uses two local template mechanisms: **simple placeholder replacement** for `make`
-commands and **Handlebars-based processing** for `apps`.
+The plugin now uses a single local template mechanism — **simple placeholder replacement** for `make`
+commands. `module` and `apps` are clone-and-stamp (no template engine).
 
 ---
 
@@ -205,58 +206,29 @@ These files/directories are skipped during template copying:
 
 ---
 
-## Handlebars Processing (App Generator)
+## Skeleton-clone (App Generator) — the current reality
 
-The `AppGenerator` uses the Handlebars template engine for more sophisticated template processing.
+> **Legacy:** the `AppGenerator` used to expand `src/templates/app/` with the Handlebars engine and
+> register `pascal_case` / `snake_case` / … helpers. As of **v0.2.0** it no longer does. The
+> Handlebars engine, its helpers, the `src/templates/app/` tree, and the automatic workspace-member
+> insertion are all removed.
 
-### Registered Helpers
+`apps generate` now works exactly like `module create` (see below): it clones the canonical
+[`backbone-application`](https://github.com/faridlab/backbone-application) skeleton and stamps names
+in. Concretely, `AppGenerator::generate_app`:
 
-| Helper | Usage in Template | Result |
-|--------|-------------------|--------|
-| `pascal_case` | `{{pascal_case name}}` | `MyService` |
-| `snake_case` | `{{snake_case name}}` | `my_service` |
-| `kebab_case` | `{{kebab_case name}}` | `my-service` |
-| `camel_case` | `{{camel_case name}}` | `myService` |
-| `upper_case` | `{{upper_case name}}` | `MY_SERVICE` |
-| `title_case` | `{{title_case name}}` | `My Service` |
+1. Bails if the target `apps/<name>/` already exists (won't clobber).
+2. `git clone --depth 1 https://github.com/faridlab/backbone-application <name>` — the skeleton repo
+   is the single source of truth for app structure.
+3. Removes `.git` and `Cargo.lock` (detach from the skeleton; resolve deps fresh).
+4. Stamps the skeleton's baked-in package name across every UTF-8 file via `replace_token_in_tree`:
+   `backbone-app` → `<name>` (kebab) and `backbone_app` → `<name_snake>` (snake). Binary/non-UTF-8
+   files and `.git` / `target` are skipped.
+5. Prints next steps, including **register the app in `metaphor.yaml`** (the generator no longer edits
+   any workspace `Cargo.toml`).
 
-### Template Variables
-
-The `AppGeneratorConfig` provides these variables to Handlebars templates:
-
-| Variable | Example |
-|----------|---------|
-| `APP_NAME` | `my-service` |
-| `APP_NAME_PASCAL` | `MyService` |
-| `APP_NAME_SNAKE` | `my_service` |
-| `APP_NAME_KEBAB` | `my-service` |
-| `APP_NAME_CAMEL` | `myService` |
-| `APP_PORT` | `3000` |
-| `DATABASE_TYPE` | `postgresql` |
-| `DATABASE_NAME` | `my_service_db` |
-| `AUTH_ENABLED` | `true` |
-| `METRICS_ENABLED` | `false` |
-| `IS_WORKER` | `false` |
-| `IS_SCHEDULER` | `false` |
-
-### File Skipping
-
-The app generator skips these files/directories:
-
-- `target/` -- build output
-- `.git/` -- git metadata
-- `node_modules/` -- npm dependencies
-- `.log` files -- log files
-- `.DS_Store` -- macOS metadata
-- `.env.local` -- local environment
-
-### Workspace Integration
-
-After generating an app, the generator:
-
-1. Searches upward from the output directory for a workspace `Cargo.toml`
-2. Adds the app to the `[workspace] members` list
-3. Saves the updated `Cargo.toml`
+Requires `git` on PATH and network access; it fails offline with an explicit error. See
+[ADR-0002](adr/0002-skeleton-clone-scaffolding.md) for the rationale.
 
 ---
 
@@ -300,5 +272,5 @@ Simple English pluralization rules:
 ## See Also
 
 - [Make Commands](commands-make.md) -- Commands using simple placeholder templates
-- [Apps Commands](commands-apps.md) -- Commands using Handlebars templates
-- [Module Commands](commands-module.md) -- Module creation with directory processing
+- [Apps Commands](commands-apps.md) -- App generation via skeleton clone
+- [Module Commands](commands-module.md) -- Module creation via skeleton clone

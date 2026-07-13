@@ -31,18 +31,20 @@ piped output stays clean.
 
 ## Templating & generation
 
-**`handlebars` v4 + simple `{{PLACEHOLDER}}` string replacement.** Two mechanisms, by design: the
+**Simple `{{PLACEHOLDER}}` string replacement for `make`; skeleton clone for `module` / `apps`.** The
 lightweight `make` targets use direct `HashMap`-driven string replacement in
-`templates/template_processor.rs` (no logic, just substitution), while richer templates can use
-Handlebars for conditionals and loops. *Rejected:* a single heavyweight template engine everywhere —
-overkill for a file whose only variable is an entity name.
+`templates/template_processor.rs` (no logic, just substitution). `module` and `apps` don't template at
+all — they clone a canonical skeleton repo and stamp names in. *Rejected:* a single heavyweight
+template engine everywhere — overkill for a file whose only variable is an entity name, and
+unnecessary once real scaffolds live in their own repos.
 
-> **Maintainer note — a live migration.** The `module create` command has *moved past* local
-> templating entirely: it now clones the canonical `backbone-module` skeleton repo and stamps names
-> in ([ADR-0002](adr/0002-skeleton-clone-scaffolding.md)). Consequently the path helpers in
-> `template_processor.rs` (which point at a legacy `crates/metaphor-cli/src/templates/…` location)
-> are dead code behind `#![allow(dead_code)]`, and `docs/templates.md`'s claim that `module` uses
-> Handlebars templates is **stale**. The `make` targets still use local `src/templates/make/…`.
+> **Maintainer note — a completed migration.** Both `module create` (v0.1.8) and `apps generate`
+> (v0.2.0) have *moved past* local templating entirely: they clone the canonical `backbone-module` /
+> `backbone-application` skeleton repos and stamp names in ([ADR-0002](adr/0002-skeleton-clone-scaffolding.md)).
+> Consequently the `handlebars` dependency is now unused, the `src/templates/app/` +
+> `src/templates/module/` trees are dead, and the path helpers in `template_processor.rs` (pointing at
+> a legacy `crates/metaphor-cli/src/templates/…` location) are dead code behind
+> `#![allow(dead_code)]`. Only the `make` targets still use local `src/templates/make/…`.
 
 **`walkdir` v2.** Recursively walks template trees and (for `routes`) source trees. *Rejected:*
 hand-rolled recursion — `walkdir` handles symlink and error edge cases correctly.
@@ -60,7 +62,7 @@ JSON-schema or hand-written traits for cross-service contracts — proto gives b
 language-neutral contracts and codegen out of the box.
 
 **`serde` + `serde_json` + `serde_yaml` v0.9.** Schema files and config are YAML; some tooling
-speaks JSON (`.sqlx/config.json`, `template-config.json`). Serde is the Rust default. *Rejected:*
+speaks JSON (e.g. `.sqlx/config.json`). Serde is the Rust default. *Rejected:*
 bespoke parsers — no reason to reinvent well-trodden serialization.
 
 ## Supporting utilities

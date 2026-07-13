@@ -46,6 +46,17 @@ The `backbone-module` repo is the **single source of truth** for module structur
 
 ## Scope
 
-This ADR covers **`module create` only**. The `make` targets still use embedded
-`src/templates/make/…` + string replacement, and `apps` still uses `src/templates/app/` +
-Handlebars. Those were not changed.
+This ADR originally covered **`module create` only**. As of **v0.2.0**, `apps generate` adopts the
+**same** decision: it clones the [`backbone-application`](https://github.com/faridlab/backbone-application)
+skeleton and stamps the baked-in package name (`backbone-app` / `backbone_app`) into the new app name,
+instead of expanding `src/templates/app/` with Handlebars. Everything above applies to `apps` too,
+with these differences:
+
+- The skeleton repo is `backbone-application`, not `backbone-module`.
+- The stamped tokens are the literal package names `backbone-app` (kebab) / `backbone_app` (snake),
+  not `__MODULE__`.
+- `apps generate` no longer edits the workspace `Cargo.toml` — the app is registered in
+  `metaphor.yaml` by the developer.
+
+The `make` targets still use embedded `src/templates/make/…` + string replacement — those were not
+changed. The Handlebars engine, its helpers, and the `src/templates/app/` tree are now dead code.

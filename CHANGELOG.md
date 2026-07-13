@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Changed
+- `apps generate` now clones the `backbone-application` skeleton from GitHub and stamps the app name
+  in, instead of expanding local Handlebars templates. The skeleton repo is the single source of
+  truth for runnable app/service structure, so generated apps stay in lockstep with it. Requires
+  `git` on PATH and network access; fails offline.
+
+### Removed
+- The Handlebars template engine and its helpers (`pascal_case`, `snake_case`, …) are gone from the
+  app generator, along with the `src/templates/app/` template tree and the automatic
+  workspace-`Cargo.toml` member insertion. Register the generated app in `metaphor.yaml` yourself.
+
+## [0.1.9]
+
 ### Added
 - `migration run-all --target <env>` routes migrations to `metaphor deploy migrate <env>`, running
   them **remotely** on that env's stack over SSH with a production confirmation gate. Add `--yes` to
@@ -49,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Modules are discovered via the `metaphor.yaml` workspace manifest.
 
 [Unreleased]: #unreleased
+[0.2.0]: #020
+[0.1.9]: #019
 [0.1.8]: #018
 [0.1.7]: #017
 [0.1.6]: #016

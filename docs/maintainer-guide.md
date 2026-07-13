@@ -14,14 +14,14 @@ flowchart LR
     DEV(["Developer"]):::person
     CLI["metaphor CLI<br/>(dispatcher)"]:::sys
     CG["metaphor-codegen<br/>(this plugin)"]:::focus
-    SKEL[("backbone-module<br/>skeleton repo · GitHub")]:::ext
+    SKEL[("backbone-module + backbone-application<br/>skeleton repos · GitHub")]:::ext
     SCHEMA["metaphor-plugin-schema<br/>(sibling plugin)"]:::ext
     PG[("PostgreSQL")]:::ext
     FS[("Project working tree<br/>+ metaphor.yaml")]:::ext
 
     DEV -->|"metaphor make / module / …"| CLI
     CLI -->|"subprocess (argv)"| CG
-    CG -->|"git clone (module create)"| SKEL
+    CG -->|"git clone (module create / apps generate)"| SKEL
     CG -->|"reads templates, writes files"| FS
     CG -->|"sqlx run (migration run)"| PG
     DEV -.->|"metaphor schema generate<br/>(entities, separately)"| SCHEMA
@@ -35,8 +35,9 @@ flowchart LR
 
 *Caption — what to notice:* the plugin never talks to the developer directly (the CLI does), and it
 does **not** generate entities — that's the sibling `metaphor-plugin-schema`, which writes into the
-*same* working tree. The two external dependencies that can fail are the **GitHub skeleton repo**
-(`module create` needs network + git) and **PostgreSQL** (`migration run` needs a reachable DB).
+*same* working tree. The two external dependencies that can fail are the **GitHub skeleton repos**
+(`module create` and `apps generate` need network + git) and **PostgreSQL** (`migration run` needs a
+reachable DB).
 
 ## The shape of the plugin (C4 level 2–3)
 
@@ -57,7 +58,7 @@ flowchart TD
 
     MAKE --> TPL["src/templates/make/…<br/>string replacement"]
     MOD --> SKEL["git clone<br/>backbone-module skeleton"]
-    APPS --> APPTPL["src/templates/app/…<br/>Handlebars"]
+    APPS --> APPSKEL["git clone<br/>backbone-application skeleton"]
     MIG --> SQLX["sqlx (subprocess)"]
     ROUTES --> SCAN["walk src/ + regex scan"]
 ```
@@ -65,7 +66,7 @@ flowchart TD
 *Caption — what to notice:* `main.rs` does only two things — parse args and dispatch to a
 `commands::<group>::handle_command(...)`. All real work lives in `src/commands/*.rs`. There is no
 shared "engine"; each command group is self-contained, and each reaches for a *different*
-generation mechanism (local templates, skeleton clone, Handlebars, or none).
+generation mechanism (local templates for `make`, skeleton clone for `module` / `apps`, or none).
 
 ### Key files
 
@@ -76,8 +77,8 @@ generation mechanism (local templates, skeleton clone, Handlebars, or none).
 | `src/commands/mod.rs` | Declares the seven command modules. |
 | `src/commands/<group>.rs` | An `Action` enum + `handle_command(&action)` per group. |
 | `src/templates/template_processor.rs` | `{{PLACEHOLDER}}` string-replacement engine for `make`. |
-| `src/templates/<kind>/…` | On-disk template files consumed by `make`/`apps`. |
-| `src/app_generator.rs` | Application scaffolding logic for `apps`. |
+| `src/templates/<kind>/…` | On-disk template files consumed by `make` (the `app/` tree is now dead). |
+| `src/app_generator.rs` | Application scaffolding logic for `apps` — clones the `backbone-application` skeleton and stamps names. |
 
 ### The CLI ↔ handler split (important)
 
@@ -91,7 +92,8 @@ enum and the handler enum and keep the `From` impl exhaustive (the compiler enfo
 
 ## How templating actually works
 
-There are **two** generation mechanisms, and a third that has replaced the first for one command.
+There are now **two** generation mechanisms: local string-replacement (only `make`) and
+skeleton-clone (`module create` **and** `apps generate`). The old Handlebars path for `apps` is gone.
 Know which one you're touching.
 
 ### 1. String-replacement (the `make` targets)
@@ -109,14 +111,10 @@ covers the common English cases — see the unit tests at the bottom of `templat
 > (it used to, and it clobbered dependency names like `metaphor-core`). Always use explicit
 > `{{…}}` placeholders in templates.
 
-### 2. Handlebars (`apps`)
+### 2. Skeleton-clone (`module create` **and** `apps generate`) — the current reality
 
-Richer templates that need conditionals/loops use `handlebars` v4 via `app_generator.rs` and
-`template-config.json` (which declares typed variables, app types, and file include/exclude globs).
-
-### 3. Skeleton-clone (`module create`) — the current reality
-
-**`module create` no longer uses local templates at all.** It:
+**Neither `module create` nor `apps generate` uses local templates anymore.** Both clone a canonical
+skeleton repo and stamp names in via the same `replace_token_in_tree` helper. `module create`:
 
 1. `git clone --depth 1 https://github.com/faridlab/backbone-module <name>` — the canonical module
    skeleton is a *separate repo*, the single source of truth for module structure.
@@ -128,9 +126,19 @@ Richer templates that need conditionals/loops use `handlebars` v4 via `app_gener
 5. Prints next steps: register in `metaphor.yaml`, edit `schema/models/…`, run `metaphor schema
    generate`.
 
+`apps generate` (in `app_generator.rs`) is the same shape:
+
+1. Bails if `apps/<name>/` already exists, then `git clone --depth 1
+   https://github.com/faridlab/backbone-application <name>`.
+2. Removes `.git` and `Cargo.lock`.
+3. Stamps the skeleton's baked-in package name — the constants `SKELETON_NAME_KEBAB` (`backbone-app`)
+   and `SKELETON_NAME_SNAKE` (`backbone_app`) — to the requested app name across every UTF-8 file.
+4. Prints next steps, including **register the app in `metaphor.yaml`** (it no longer edits any
+   workspace `Cargo.toml`).
+
 See [ADR-0002](adr/0002-skeleton-clone-scaffolding.md) for *why*. The consequence for maintainers:
-**to change the generated module layout, edit the `backbone-module` repo, not this plugin.** This
-plugin only clones and stamps.
+**to change the generated module/app layout, edit the `backbone-module` / `backbone-application` repo,
+not this plugin.** This plugin only clones and stamps.
 
 Traced end-to-end, `metaphor make module payments` (or `metaphor-codegen module create payments`):
 
@@ -167,6 +175,10 @@ string-stamping — no template engine involved.
 (`#![allow(dead_code)]`). Don't build new features on them — if you need the make-template dir,
 resolve it relative to this crate. This is cleanup debt, flagged here so you don't mistake it for
 live wiring.
+
+The `src/templates/app/` tree is likewise dead as of v0.2.0: `apps generate` clones the
+`backbone-application` skeleton instead of expanding it. Same story as `src/templates/module/` after
+v0.1.8 — outstanding cleanup, not live wiring.
 
 ## Walkthrough: add a new `make` target
 
