@@ -5,11 +5,20 @@
 
 use anyhow::Result;
 use anyhow::{anyhow, Context};
-use handlebars::Handlebars;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::process::Command;
+
+/// The canonical application skeleton. `metaphor apps generate` clones this and renames it —
+/// backbone-application is the single source of truth for runnable app/service structure.
+/// Always cloned fresh from GitHub so every workspace scaffolds from the latest skeleton.
+const APP_SKELETON_REPO: &str = "https://github.com/faridlab/backbone-application";
+
+/// Literal package/binary name baked into the skeleton's load-bearing files (kebab form).
+const SKELETON_NAME_KEBAB: &str = "backbone-app";
+/// Literal package name in snake form (RUST_LOG targets, database name, etc.).
+const SKELETON_NAME_SNAKE: &str = "backbone_app";
 
 /// Application generator configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,315 +68,84 @@ impl Default for AppGeneratorConfig {
     }
 }
 
-/// Application generator
+/// Application generator.
+///
+/// Scaffolds a new app/service by cloning the canonical [`APP_SKELETON_REPO`] skeleton
+/// fresh from GitHub and renaming its baked-in package/binary name to the requested app
+/// name. No local template directory is involved — the GitHub repo is the single source
+/// of truth, so every workspace scaffolds from the latest skeleton.
 pub struct AppGenerator {
-    handlebars: Handlebars<'static>,
-    template_dir: PathBuf,
+    /// Skeleton repository URL cloned for each generated app.
+    skeleton_repo: String,
 }
 
 impl AppGenerator {
-    /// Create a new app generator
+    /// Create a new app generator.
     pub fn new() -> Result<Self> {
-        let mut handlebars = Handlebars::new();
-
-        // Register custom helpers
-        handlebars.register_helper("pascal_case", Box::new(pascal_case_helper));
-        handlebars.register_helper("snake_case", Box::new(snake_case_helper));
-        handlebars.register_helper("kebab_case", Box::new(kebab_case_helper));
-        handlebars.register_helper("camel_case", Box::new(camel_case_helper));
-        handlebars.register_helper("upper_case", Box::new(upper_case_helper));
-        handlebars.register_helper("title_case", Box::new(title_case_helper));
-
-        let template_dir = {
-        let current_dir = std::env::current_dir()
-            .context("Failed to get current directory")?;
-
-        // Try multiple possible paths
-        let possible_paths = vec![
-            current_dir.join("crates/metaphor-cli/src/templates/app"),
-            current_dir.join("templates/app"),
-            current_dir.join("src/templates/app"),
-        ];
-
-        match possible_paths.into_iter().find(|path| path.exists()) {
-            Some(path) => path,
-            None => {
-                return Err(anyhow!("Template directory not found. Current directory: {}\nSearched paths:\n- {}/crates/metaphor-cli/src/templates/app\n- {}/templates/app\n- {}/src/templates/app",
-                    current_dir.display(), current_dir.display(), current_dir.display(), current_dir.display()));
-            }
-        }
-    };
-
         Ok(Self {
-            handlebars,
-            template_dir,
+            skeleton_repo: APP_SKELETON_REPO.to_string(),
         })
     }
 
-    /// Generate a new application
+    /// Generate a new application by cloning the skeleton and renaming it.
     pub async fn generate_app(&self, config: &AppGeneratorConfig, output_dir: &Path) -> Result<()> {
         println!("🚀 Generating Metaphor Framework app: {}", config.app_name);
 
-        // Create output directory
         let app_output_dir = output_dir.join(&config.app_name);
-        fs::create_dir_all(&app_output_dir)
-            .with_context(|| format!("Failed to create output directory: {}", app_output_dir.display()))?;
+        if app_output_dir.exists() {
+            return Err(anyhow!(
+                "'{}' already exists — refusing to overwrite.",
+                app_output_dir.display()
+            ));
+        }
 
-        // Prepare template variables
-        let variables = self.prepare_variables(config)?;
+        // Ensure the parent output directory exists (git clone creates the leaf itself).
+        fs::create_dir_all(output_dir).with_context(|| {
+            format!("Failed to create output directory: {}", output_dir.display())
+        })?;
 
-        // Copy and process template files
-        self.copy_template_files(&self.template_dir, &app_output_dir, &variables)
-            .await?;
+        // Scaffold by cloning the canonical skeleton project from GitHub (shallow).
+        println!("📥 Cloning skeleton from {}", self.skeleton_repo);
+        let status = Command::new("git")
+            .args(["clone", "--depth", "1", &self.skeleton_repo])
+            .arg(&app_output_dir)
+            .status()
+            .context("failed to run `git clone` (is git installed and on PATH?)")?;
+        if !status.success() {
+            return Err(anyhow!(
+                "git clone of {} failed — ensure the repo is reachable and you have access.",
+                self.skeleton_repo
+            ));
+        }
 
-        // Update workspace Cargo.toml
-        let workspace_root = self.find_workspace_root(output_dir)?;
-        self.update_workspace_cargo_toml(&workspace_root, config).await?;
+        // Detach from the skeleton repo: this is a fresh app, not a fork. Drop the lockfile
+        // too so dependencies resolve fresh under the new package name.
+        let _ = fs::remove_dir_all(app_output_dir.join(".git"));
+        let _ = fs::remove_file(app_output_dir.join("Cargo.lock"));
+
+        // Rename the skeleton's baked-in package/binary name to the requested app name.
+        // The skeleton uses the literal `backbone-app` (kebab) and `backbone_app` (snake)
+        // across load-bearing files (Cargo.toml, src/main.rs, Dockerfiles, config, deployment).
+        let app_snake = to_snake_case(&config.app_name);
+        let kebab_changed =
+            replace_token_in_tree(&app_output_dir, SKELETON_NAME_KEBAB, &config.app_name)
+                .context("renaming skeleton package name (kebab) into the new app")?;
+        let snake_changed = replace_token_in_tree(&app_output_dir, SKELETON_NAME_SNAKE, &app_snake)
+            .context("renaming skeleton package name (snake) into the new app")?;
+        println!(
+            "🔖 Renamed skeleton package to '{}' across {} file(s)",
+            config.app_name,
+            kebab_changed + snake_changed
+        );
 
         println!("✅ Successfully generated app: {}", config.app_name);
         println!("📁 Location: {}", app_output_dir.display());
         println!("🔧 Next steps:");
+        println!("   1. Register in metaphor.yaml (name: {} / type: backend-service)", config.app_name);
         println!("   cd {}", config.app_name);
         println!("   cargo run");
 
         Ok(())
-    }
-
-    /// Prepare template variables from config
-    fn prepare_variables(&self, config: &AppGeneratorConfig) -> Result<HashMap<String, String>> {
-        let mut variables = HashMap::new();
-
-        // Basic app information
-        variables.insert("APP_NAME".to_string(), config.app_name.clone());
-        variables.insert("APP_NAME_PASCAL".to_string(), to_pascal_case(&config.app_name));
-        variables.insert("APP_NAME_SNAKE".to_string(), to_snake_case(&config.app_name));
-        variables.insert("APP_NAME_KEBAB".to_string(), to_kebab_case(&config.app_name));
-        variables.insert("APP_NAME_CAMEL".to_string(), to_camel_case(&config.app_name));
-        variables.insert("APP_PORT".to_string(), config.app_port.to_string());
-        variables.insert("APP_DESCRIPTION".to_string(), config.app_description.clone());
-        variables.insert("APP_TYPE".to_string(), config.app_type.clone());
-        variables.insert("DATABASE_TYPE".to_string(), config.database_type.clone());
-        variables.insert("DATABASE_NAME".to_string(), config.database_name.clone());
-        variables.insert("AUTH_ENABLED".to_string(), config.auth_enabled.to_string());
-        variables.insert("HEALTH_ENABLED".to_string(), config.health_enabled.to_string());
-        variables.insert("METRICS_ENABLED".to_string(), config.metrics_enabled.to_string());
-        variables.insert("AUTHOR_NAME".to_string(), config.author_name.clone());
-        variables.insert("AUTHOR_EMAIL".to_string(), config.author_email.clone());
-        variables.insert("CREATION_YEAR".to_string(), config.creation_year.to_string());
-
-        // Current timestamp
-        let now = chrono::Utc::now();
-        variables.insert("CREATION_DATE".to_string(), now.format("%Y-%m-%d").to_string());
-        variables.insert("CREATION_DATETIME".to_string(), now.to_rfc3339());
-
-        // App type specific configurations
-        match config.app_type.as_str() {
-            "auth" => {
-                variables.insert("INCLUDE_AUTH".to_string(), "true".to_string());
-                variables.insert("INCLUDE_SESSIONS".to_string(), "true".to_string());
-            }
-            "worker" => {
-                variables.insert("INCLUDE_WORKER".to_string(), "true".to_string());
-                variables.insert("INCLUDE_JOB_QUEUE".to_string(), "true".to_string());
-            }
-            "scheduler" => {
-                variables.insert("INCLUDE_SCHEDULER".to_string(), "true".to_string());
-                variables.insert("INCLUDE_CRON".to_string(), "true".to_string());
-            }
-            _ => {
-                variables.insert("INCLUDE_AUTH".to_string(), "false".to_string());
-                variables.insert("INCLUDE_WORKER".to_string(), "false".to_string());
-                variables.insert("INCLUDE_SCHEDULER".to_string(), "false".to_string());
-            }
-        }
-
-        Ok(variables)
-    }
-
-    /// Copy and process template files
-    async fn copy_template_files(
-        &self,
-        template_dir: &Path,
-        output_dir: &Path,
-        variables: &HashMap<String, String>,
-    ) -> Result<()> {
-        self.copy_files_recursive(template_dir, output_dir, variables)
-            .await
-    }
-
-    /// Recursively copy and process files
-    async fn copy_files_recursive(
-        &self,
-        src_dir: &Path,
-        dst_dir: &Path,
-        variables: &HashMap<String, String>,
-    ) -> Result<()> {
-        let mut dirs_to_process = Vec::new();
-        dirs_to_process.push((src_dir.to_path_buf(), dst_dir.to_path_buf()));
-
-        while let Some((current_src_dir, current_dst_dir)) = dirs_to_process.pop() {
-            let entries = fs::read_dir(&current_src_dir)
-                .with_context(|| format!("Failed to read directory: {}", current_src_dir.display()))?;
-
-            for entry in entries {
-                let entry = entry
-                    .with_context(|| format!("Failed to read directory entry"))?;
-                let src_path = entry.path();
-                let _file_name = entry.file_name();
-                let relative_path = src_path.strip_prefix(&current_src_dir)
-                    .with_context(|| format!("Failed to get relative path for: {}", src_path.display()))?;
-
-                // Skip certain directories and files
-                if self.should_skip_file(&relative_path) {
-                    continue;
-                }
-
-                let dst_path = current_dst_dir.join(relative_path);
-
-                if src_path.is_dir() {
-                    // Create directory
-                    fs::create_dir_all(&dst_path)
-                        .with_context(|| format!("Failed to create directory: {}", dst_path.display()))?;
-
-                    // Add subdirectory to processing stack
-                    dirs_to_process.push((src_path, dst_path));
-                } else {
-                    // Process file
-                    self.process_template_file(&src_path, &dst_path, variables)
-                        .await?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Process a single template file
-    async fn process_template_file(
-        &self,
-        src_path: &Path,
-        dst_path: &Path,
-        variables: &HashMap<String, String>,
-    ) -> Result<()> {
-        // Ensure parent directory exists
-        if let Some(parent) = dst_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create parent directory: {}", parent.display()))?;
-        }
-
-        // Read file content
-        let content = fs::read_to_string(src_path)
-            .with_context(|| format!("Failed to read file: {}", src_path.display()))?;
-
-        // Check if file should be processed as template
-        if self.is_template_file(src_path) {
-            // Process as handlebars template
-            let processed_content = self.handlebars
-                .render_template(&content, variables)
-                .with_context(|| format!("Failed to process template: {}", src_path.display()))?;
-
-            fs::write(dst_path, processed_content)
-                .with_context(|| format!("Failed to write file: {}", dst_path.display()))?;
-        } else {
-            // Copy file as-is
-            fs::copy(src_path, dst_path)
-                .with_context(|| format!("Failed to copy file: {} -> {}", src_path.display(), dst_path.display()))?;
-        }
-
-        Ok(())
-    }
-
-    /// Find the workspace root by searching for Cargo.toml with [workspace] section
-    fn find_workspace_root(&self, start_dir: &Path) -> Result<PathBuf> {
-        let mut current_dir = start_dir.to_path_buf();
-
-        loop {
-            let cargo_toml_path = current_dir.join("Cargo.toml");
-
-            if cargo_toml_path.exists() {
-                let content = fs::read_to_string(&cargo_toml_path)
-                    .with_context(|| format!("Failed to read: {}", cargo_toml_path.display()))?;
-
-                // Check if this is a workspace Cargo.toml
-                if content.contains("[workspace]") || content.contains("[package]") {
-                    return Ok(current_dir);
-                }
-            }
-
-            // Move up to parent directory
-            match current_dir.parent() {
-                Some(parent) => {
-                    current_dir = parent.to_path_buf();
-                    if current_dir.as_os_str() == "/" {
-                        break;
-                    }
-                }
-                None => break,
-            }
-        }
-
-        Err(anyhow!("Workspace Cargo.toml not found starting from: {}", start_dir.display()))
-    }
-
-    /// Update workspace Cargo.toml to include new app
-    async fn update_workspace_cargo_toml(
-        &self,
-        workspace_dir: &Path,
-        config: &AppGeneratorConfig,
-    ) -> Result<()> {
-        let workspace_cargo_toml = workspace_dir.join("Cargo.toml");
-
-        if !workspace_cargo_toml.exists() {
-            return Err(anyhow!("Workspace Cargo.toml not found: {}", workspace_cargo_toml.display()));
-        }
-
-        let mut content = fs::read_to_string(&workspace_cargo_toml)
-            .with_context(|| "Failed to read workspace Cargo.toml")?;
-
-        // Add workspace member
-        let workspace_member_line = format!(r#""{}"#, config.app_name);
-
-        if !content.contains(&workspace_member_line) {
-            // Find the workspace members section and add the new member
-            if let Some(start) = content.find("members = [") {
-                if let Some(end) = content[start..].find(']') {
-                    let members_section = &content[start..start + end + 1];
-                    let new_members_section = members_section.replace(']', &format!("\n    {},\n]", workspace_member_line));
-                    content.replace_range(start..start + end + 1, &new_members_section);
-                }
-            }
-
-            fs::write(&workspace_cargo_toml, content)
-                .with_context(|| "Failed to update workspace Cargo.toml")?;
-        }
-
-        Ok(())
-    }
-
-    /// Check if a file should be skipped during copying
-    fn should_skip_file(&self, relative_path: &Path) -> bool {
-        let path_str = relative_path.to_string_lossy();
-
-        // Skip directories and files that shouldn't be in templates
-        path_str.contains("target/") ||
-        path_str.contains(".git/") ||
-        path_str.contains("node_modules/") ||
-        path_str.ends_with(".log") ||
-        path_str.ends_with(".DS_Store") ||
-        path_str.ends_with(".env.local")
-    }
-
-    /// Check if a file should be processed as a template
-    fn is_template_file(&self, path: &Path) -> bool {
-        match path.extension().and_then(|s| s.to_str()) {
-            Some("rs") => true,     // Rust files
-            Some("toml") => true,   // Cargo.toml files
-            Some("yml") => true,    // YAML files
-            Some("yaml") => true,   // YAML files
-            Some("json") => true,   // JSON files
-            Some("md") => true,     // Markdown files
-            _ => false,
-        }
     }
 }
 
@@ -375,6 +153,35 @@ impl Default for AppGenerator {
     fn default() -> Self {
         Self::new().expect("Failed to create AppGenerator")
     }
+}
+
+/// Recursively replace `token` with `value` in every UTF-8 text file under `root`.
+/// Skips `.git` and `target`, and any file that isn't valid UTF-8 (e.g. binaries). Returns
+/// the number of files changed. Used to stamp the new app name into the cloned skeleton.
+fn replace_token_in_tree(root: &Path, token: &str, value: &str) -> Result<usize> {
+    let mut changed = 0;
+    for entry in fs::read_dir(root).with_context(|| format!("reading dir {}", root.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            let name = entry.file_name();
+            if name == ".git" || name == "target" {
+                continue;
+            }
+            changed += replace_token_in_tree(&path, token, value)?;
+        } else if file_type.is_file() {
+            // Only rewrite files that are valid UTF-8 and actually contain the token.
+            if let Ok(content) = fs::read_to_string(&path) {
+                if content.contains(token) {
+                    fs::write(&path, content.replace(token, value))
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    changed += 1;
+                }
+            }
+        }
+    }
+    Ok(changed)
 }
 
 // Helper functions for string transformations
@@ -429,92 +236,6 @@ pub fn to_title_case(s: &str) -> String {
         })
         .collect::<Vec<String>>()
         .join(" ")
-}
-
-// Handlebars helpers
-
-fn pascal_case_helper(
-    h: &handlebars::Helper<'_, '_>,
-    _: &handlebars::Handlebars,
-    _: &handlebars::Context,
-    _: &mut handlebars::RenderContext<'_, '_>,
-    out: &mut dyn handlebars::Output,
-) -> handlebars::HelperResult {
-    if let Some(param) = h.param(0) {
-        let value = param.value().as_str().unwrap_or("");
-        out.write(&to_pascal_case(value))?;
-    }
-    Ok(())
-}
-
-fn snake_case_helper(
-    h: &handlebars::Helper<'_, '_>,
-    _: &handlebars::Handlebars,
-    _: &handlebars::Context,
-    _: &mut handlebars::RenderContext<'_, '_>,
-    out: &mut dyn handlebars::Output,
-) -> handlebars::HelperResult {
-    if let Some(param) = h.param(0) {
-        let value = param.value().as_str().unwrap_or("");
-        out.write(&to_snake_case(value))?;
-    }
-    Ok(())
-}
-
-fn kebab_case_helper(
-    h: &handlebars::Helper<'_, '_>,
-    _: &handlebars::Handlebars,
-    _: &handlebars::Context,
-    _: &mut handlebars::RenderContext<'_, '_>,
-    out: &mut dyn handlebars::Output,
-) -> handlebars::HelperResult {
-    if let Some(param) = h.param(0) {
-        let value = param.value().as_str().unwrap_or("");
-        out.write(&to_kebab_case(value))?;
-    }
-    Ok(())
-}
-
-fn camel_case_helper(
-    h: &handlebars::Helper<'_, '_>,
-    _: &handlebars::Handlebars,
-    _: &handlebars::Context,
-    _: &mut handlebars::RenderContext<'_, '_>,
-    out: &mut dyn handlebars::Output,
-) -> handlebars::HelperResult {
-    if let Some(param) = h.param(0) {
-        let value = param.value().as_str().unwrap_or("");
-        out.write(&to_camel_case(value))?;
-    }
-    Ok(())
-}
-
-fn upper_case_helper(
-    h: &handlebars::Helper<'_, '_>,
-    _: &handlebars::Handlebars,
-    _: &handlebars::Context,
-    _: &mut handlebars::RenderContext<'_, '_>,
-    out: &mut dyn handlebars::Output,
-) -> handlebars::HelperResult {
-    if let Some(param) = h.param(0) {
-        let value = param.value().as_str().unwrap_or("");
-        out.write(&to_upper_case(value))?;
-    }
-    Ok(())
-}
-
-fn title_case_helper(
-    h: &handlebars::Helper<'_, '_>,
-    _: &handlebars::Handlebars,
-    _: &handlebars::Context,
-    _: &mut handlebars::RenderContext<'_, '_>,
-    out: &mut dyn handlebars::Output,
-) -> handlebars::HelperResult {
-    if let Some(param) = h.param(0) {
-        let value = param.value().as_str().unwrap_or("");
-        out.write(&to_title_case(value))?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
