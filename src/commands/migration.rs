@@ -1282,9 +1282,14 @@ async fn run_migrations_manually(migrations_dir: &Path, database_url: &str) -> R
         .filter_map(|e| e.ok())
         .filter(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            // Include .sql files but exclude down.sql and files in subdirectories like seeds/
+            // Forward migrations only: include *.sql / *.up.sql, but exclude ANY rollback
+            // file (`down.sql` or `<version>.down.sql`) and seed files. Running a `*.down.sql`
+            // forward is catastrophic — e.g. a later module's create_enums.down.sql does
+            // `DROP TYPE gl_posting_state CASCADE`, cascading away already-created columns
+            // that depend on the shared enum.
             (name.ends_with(".sql") || name.ends_with(".up.sql"))
                 && name != "down.sql"
+                && !name.ends_with(".down.sql")
                 && !name.starts_with("seed")
                 && e.path().is_file()
         })
@@ -1470,8 +1475,11 @@ async fn run_migrations_with_tracking(
         .filter_map(|e| e.ok())
         .filter(|e| {
             let name = e.file_name().to_string_lossy().to_string();
+            // Forward migrations only — never execute rollback (`*.down.sql`) files.
+            // See run_migrations_manually for why running a down forward corrupts the schema.
             (name.ends_with(".sql") || name.ends_with(".up.sql"))
                 && name != "down.sql"
+                && !name.ends_with(".down.sql")
                 && !name.starts_with("seed")
                 && e.path().is_file()
         })
