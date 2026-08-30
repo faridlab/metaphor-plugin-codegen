@@ -1361,8 +1361,22 @@ impl DbConnectionParams {
 
     /// Execute a SQL query using psql and return stdout
     fn execute_query(&self, sql: &str) -> Result<String> {
-        let output = std::process::Command::new("psql")
-            .env("PGPASSWORD", &self.password)
+        self.execute_query_with_vars(sql, &[])
+    }
+
+    /// Run a query through psql with psql variables bound.
+    ///
+    /// The SQL is fed on stdin (script mode) rather than `-c`: psql performs
+    /// variable interpolation only in script input, so values passed as
+    /// `-v name=value` and referenced as `:'name'` expand into safely quoted
+    /// literals — the parameterization available at a psql seam, where
+    /// server-side bind parameters are not.
+    fn execute_query_with_vars(&self, sql: &str, vars: &[(&str, &str)]) -> Result<String> {
+        use std::io::Write;
+        use std::process::Stdio;
+
+        let mut cmd = std::process::Command::new("psql");
+        cmd.env("PGPASSWORD", &self.password)
             .args([
                 "-h", &self.host,
                 "-p", &self.port.to_string(),
@@ -1370,9 +1384,22 @@ impl DbConnectionParams {
                 "-d", &self.database,
                 "-t",  // Tuples only (no headers/footers)
                 "-A",  // Unaligned output
-                "-c", sql,
+                "-f", "-",  // Read the script from stdin
             ])
-            .output()?;
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (name, value) in vars {
+            cmd.arg("-v").arg(format!("{name}={value}"));
+        }
+
+        let mut child = cmd.spawn()?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(sql.as_bytes())?;
+        }
+        // Drop stdin so psql sees end-of-script and runs.
+        drop(child.stdin.take());
+        let output = child.wait_with_output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1406,16 +1433,21 @@ impl DbConnectionParams {
 }
 
 /// Ensure the schema_migrations table exists
+///
+/// The table is created in `public` explicitly: the runner connects with
+/// whatever search_path the role carries, and an unqualified reference would
+/// create (or find) a per-schema bookkeeping table — splitting the applied
+/// record across schemas and re-running migrations that already landed.
 fn ensure_schema_migrations_table(db: &DbConnectionParams) -> Result<()> {
     let create_table_sql = r#"
-        CREATE TABLE IF NOT EXISTS schema_migrations (
+        CREATE TABLE IF NOT EXISTS public.schema_migrations (
             id SERIAL PRIMARY KEY,
             module VARCHAR(100) NOT NULL,
             name VARCHAR(255) NOT NULL,
             applied_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
             UNIQUE(module, name)
         );
-        CREATE INDEX IF NOT EXISTS idx_schema_migrations_module ON schema_migrations(module);
+        CREATE INDEX IF NOT EXISTS idx_schema_migrations_module ON public.schema_migrations(module);
     "#;
 
     db.execute_query(create_table_sql)?;
@@ -1424,37 +1456,26 @@ fn ensure_schema_migrations_table(db: &DbConnectionParams) -> Result<()> {
 
 /// Check if a migration has already been applied
 fn is_migration_applied(db: &DbConnectionParams, module: &str, migration_name: &str) -> Result<bool> {
-    let sql = format!(
-        "SELECT COUNT(*) FROM schema_migrations WHERE module = '{}' AND name = '{}'",
-        module.replace('\'', "''"),
-        migration_name.replace('\'', "''")
-    );
+    let sql = "SELECT COUNT(*) FROM public.schema_migrations WHERE module = :'module' AND name = :'name'";
 
-    let result = db.execute_query(&sql)?;
+    let result = db.execute_query_with_vars(sql, &[("module", module), ("name", migration_name)])?;
     let count: i32 = result.parse().unwrap_or(0);
     Ok(count > 0)
 }
 
 /// Record a migration as applied
 fn record_migration(db: &DbConnectionParams, module: &str, migration_name: &str) -> Result<()> {
-    let sql = format!(
-        "INSERT INTO schema_migrations (module, name) VALUES ('{}', '{}') ON CONFLICT (module, name) DO NOTHING",
-        module.replace('\'', "''"),
-        migration_name.replace('\'', "''")
-    );
+    let sql = "INSERT INTO public.schema_migrations (module, name) VALUES (:'module', :'name') ON CONFLICT (module, name) DO NOTHING";
 
-    db.execute_query(&sql)?;
+    db.execute_query_with_vars(sql, &[("module", module), ("name", migration_name)])?;
     Ok(())
 }
 
 /// Get the count of applied migrations for a module
 fn get_applied_migration_count(db: &DbConnectionParams, module: &str) -> Result<i32> {
-    let sql = format!(
-        "SELECT COUNT(*) FROM schema_migrations WHERE module = '{}'",
-        module.replace('\'', "''")
-    );
+    let sql = "SELECT COUNT(*) FROM public.schema_migrations WHERE module = :'module'";
 
-    let result = db.execute_query(&sql)?;
+    let result = db.execute_query_with_vars(sql, &[("module", module)])?;
     let count: i32 = result.parse().unwrap_or(0);
     Ok(count)
 }
