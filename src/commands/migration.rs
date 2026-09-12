@@ -1161,39 +1161,14 @@ async fn run_migrations(module: &str, database_url: Option<&str>) -> Result<()> 
         module.bright_yellow()
     );
 
-    // Check both possible migration directories.
-    // The schema generator (metaphor-plugin-schema) emits to top-level `migrations/`,
-    // so that's preferred. `migrations/postgres/` is a legacy per-backend layout kept
-    // as a fallback for projects that still use it.
     let module_base = module_base_path(module);
-    let root_dir = module_base.join("migrations");
-    let postgres_dir = module_base.join("migrations/postgres");
-
-    // Helper to check if directory has top-level SQL files (non-recursive).
-    let has_sql_files = |dir: &Path| -> bool {
-        if !dir.exists() {
-            return false;
-        }
-        fs::read_dir(dir)
-            .map(|entries| entries.filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file())
-                .any(|e| e.path().extension().map_or(false, |ext| ext == "sql")))
-            .unwrap_or(false)
-    };
-
-    // Prefer `migrations/` (top-level) when it has SQL files, since that's where
-    // the schema generator emits. Fall back to `migrations/postgres/` for legacy.
-    let migrations_dir = if has_sql_files(&root_dir) {
-        root_dir
-    } else if has_sql_files(&postgres_dir) {
-        postgres_dir
-    } else {
-        return Err(anyhow::anyhow!(
+    let migrations_dir = resolve_migrations_dir(module).ok_or_else(|| {
+        anyhow::anyhow!(
             "No SQL migration files found at:\n  - {}\n  - {}\nRun 'metaphor migration generate' first.",
-            root_dir.display(),
-            postgres_dir.display()
-        ));
-    };
+            module_base.join("migrations").display(),
+            module_base.join("migrations/postgres").display()
+        )
+    })?;
 
     // Get database URL from parameter, environment, or app config
     let db_url = match database_url {
@@ -1316,6 +1291,11 @@ async fn run_migrations_manually(migrations_dir: &Path, database_url: &str) -> R
                 "-d", database,
                 "-f", entry.path().to_str().unwrap(),
                 "-q",  // Quiet mode
+                // Abort on the FIRST failing statement: without this psql
+                // reports the error, keeps executing the rest of the file,
+                // and exits 0 — a half-applied file would be reported as
+                // done (and, for migrations, recorded as applied).
+                "-v", "ON_ERROR_STOP=1",
             ])
             .output()?;
 
@@ -1385,6 +1365,9 @@ impl DbConnectionParams {
                 "-t",  // Tuples only (no headers/footers)
                 "-A",  // Unaligned output
                 "-f", "-",  // Read the script from stdin
+                // A bookkeeping query that fails must surface as a
+                // non-zero exit, not as text swallowed into stdout.
+                "-v", "ON_ERROR_STOP=1",
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1420,6 +1403,12 @@ impl DbConnectionParams {
                 "-d", &self.database,
                 "-f", file_path.to_str().unwrap(),
                 "-q",  // Quiet mode
+                // Abort on the FIRST failing statement: without this psql
+                // reports the error, keeps executing the rest of the file,
+                // and exits 0 — a half-applied migration would be recorded
+                // as applied (record_migration runs only after this
+                // returns Ok) and never re-run.
+                "-v", "ON_ERROR_STOP=1",
             ])
             .output()?;
 
@@ -1708,6 +1697,11 @@ async fn run_sql_seeds(seeds_dir: &Path, name: Option<&str>, database_url: &str)
                 "-d", database,
                 "-f", entry.path().to_str().unwrap(),
                 "-q",  // Quiet mode
+                // Abort on the FIRST failing statement: without this psql
+                // reports the error, keeps executing the rest of the file,
+                // and exits 0 — a half-applied file would be reported as
+                // done (and, for migrations, recorded as applied).
+                "-v", "ON_ERROR_STOP=1",
             ])
             .output()?;
 
@@ -2337,6 +2331,42 @@ pub(crate) fn module_base_path(module: &str) -> std::path::PathBuf {
     Path::new("libs/modules").join(module)
 }
 
+/// Resolve the directory holding a module's SQL migrations.
+///
+/// The schema generator emits to a top-level `migrations/`, so that wins when
+/// it holds SQL files; `migrations/postgres/` is a legacy per-backend layout
+/// kept as a fallback. `None` means the module ships no SQL migration files at
+/// all — a project whose `migrations/` holds only `manual/`, for instance. That
+/// is a normal state for an app that owns no schema, not a failure, so callers
+/// that sweep many modules skip it instead of counting it as an error.
+pub(crate) fn resolve_migrations_dir(module: &str) -> Option<std::path::PathBuf> {
+    // Top-level SQL files only — a directory holding just `manual/` does not count.
+    let has_sql_files = |dir: &Path| -> bool {
+        if !dir.exists() {
+            return false;
+        }
+        fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_file())
+                    .any(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
+            })
+            .unwrap_or(false)
+    };
+
+    let module_base = module_base_path(module);
+    let root_dir = module_base.join("migrations");
+    if has_sql_files(&root_dir) {
+        return Some(root_dir);
+    }
+    let postgres_dir = module_base.join("migrations/postgres");
+    if has_sql_files(&postgres_dir) {
+        return Some(postgres_dir);
+    }
+    None
+}
+
 /// Discover all modules that have a `migrations/` directory.
 ///
 /// Strategy:
@@ -2477,6 +2507,122 @@ fn run_all_migrations_remote(env: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
+/// What a sweep should do once a pass is finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PassVerdict {
+    /// Everything pending has been applied.
+    Done,
+    /// Something moved this pass, so the modules still pending may now be able
+    /// to run.
+    Retry,
+    /// Nothing moved, or the pass budget is spent: the remaining failures are
+    /// real and another pass would only reproduce them.
+    Stop,
+}
+
+/// Schedules repeated passes over the modules that still have migrations to
+/// apply.
+///
+/// Modules are discovered alphabetically, which is not migration order: a
+/// module's migrations can need database objects another module creates, with
+/// nothing in the manifest to sort on. Rather than guess an order, the sweep
+/// runs what is pending and retries whatever failed for as long as the previous
+/// pass moved something forward — a module blocked only by a sibling succeeds
+/// once that sibling has run. Termination is guaranteed: every pass either
+/// empties the pending set, applies at least one migration (a finite supply),
+/// or stops.
+pub(crate) struct Sweep {
+    pending: Vec<String>,
+    pass: usize,
+    max_passes: usize,
+    advanced: bool,
+    still_pending: Vec<String>,
+    failures: Vec<(String, String)>,
+    succeeded: Vec<(String, usize)>,
+}
+
+impl Sweep {
+    pub(crate) fn new(modules: Vec<String>) -> Self {
+        // A chain of N modules converges in at most N passes; the bound only
+        // guards against a runner that reports progress without making any.
+        let max_passes = modules.len().max(1) + 1;
+        Self {
+            pending: modules,
+            pass: 1,
+            max_passes,
+            advanced: false,
+            still_pending: Vec::new(),
+            failures: Vec::new(),
+            succeeded: Vec::new(),
+        }
+    }
+
+    /// The modules to run in the current pass.
+    pub(crate) fn pending(&self) -> Vec<String> {
+        self.pending.clone()
+    }
+
+    /// The pass now being run, counting from one.
+    pub(crate) fn pass(&self) -> usize {
+        self.pass
+    }
+
+    pub(crate) fn record_success(&mut self, module: &str) {
+        self.succeeded.push((module.to_string(), self.pass));
+        self.advanced = true;
+    }
+
+    /// `applied_something` reports whether the module got part of its chain in
+    /// before failing — that is progress too, and may unblock a sibling.
+    pub(crate) fn record_failure(&mut self, module: &str, error: &str, applied_something: bool) {
+        if applied_something {
+            self.advanced = true;
+        }
+        self.still_pending.push(module.to_string());
+        self.failures.push((module.to_string(), error.to_string()));
+    }
+
+    /// Close the pass and say what to do next.
+    pub(crate) fn finish_pass(&mut self) -> PassVerdict {
+        let advanced = self.advanced;
+        let still_pending = std::mem::take(&mut self.still_pending);
+        self.advanced = false;
+
+        if still_pending.is_empty() {
+            self.pending.clear();
+            return PassVerdict::Done;
+        }
+
+        self.pending = still_pending;
+
+        if !advanced || self.pass >= self.max_passes {
+            return PassVerdict::Stop;
+        }
+
+        // Only the failures of the last pass matter; an earlier pass's failure
+        // may since have been applied.
+        self.failures.clear();
+        self.pass += 1;
+        PassVerdict::Retry
+    }
+
+    /// Modules that applied cleanly, with the pass they needed.
+    pub(crate) fn succeeded(&self) -> &[(String, usize)] {
+        &self.succeeded
+    }
+
+    /// Modules that succeeded only on a retry — an undeclared dependency on a
+    /// sibling module, and worth naming in the summary.
+    pub(crate) fn deferred(&self) -> Vec<&(String, usize)> {
+        self.succeeded.iter().filter(|(_, pass)| *pass > 1).collect()
+    }
+
+    /// Modules still failing when the sweep stopped, with their last error.
+    pub(crate) fn failures(&self) -> &[(String, String)] {
+        &self.failures
+    }
+}
+
 pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
     println!("🚀 {} Running migrations for ALL modules...", "Starting".bright_cyan().bold());
     println!();
@@ -2495,11 +2641,20 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
     );
     println!();
 
-    // Discover all modules
-    let modules = discover_modules()?;
+    // Discover all modules, and separate the ones that ship no SQL of their own.
+    // A project whose `migrations/` holds only `manual/` has nothing to apply;
+    // counting it as a failure made every sweep report an error that no action
+    // could ever clear.
+    let discovered = discover_modules()?;
+    let (modules, skipped): (Vec<String>, Vec<String>) = discovered
+        .into_iter()
+        .partition(|module| resolve_migrations_dir(module).is_some());
 
     if modules.is_empty() {
         println!("   ⚠️  No projects with migrations found (checked metaphor.yaml projects and libs/modules/)");
+        if !skipped.is_empty() {
+            println!("   ⏭️  Skipped, no SQL migrations of their own: {}", skipped.join(", "));
+        }
         return Ok(());
     }
 
@@ -2507,41 +2662,103 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
     for module in &modules {
         println!("   • {}", module.bright_yellow());
     }
+    if !skipped.is_empty() {
+        println!("   ⏭️  Skipping {} project(s) with no SQL migrations: {}",
+            skipped.len().to_string().bright_yellow(),
+            skipped.join(", ")
+        );
+    }
     println!();
 
-    // Run migrations for each module in order
-    let mut success_count = 0;
-    let mut error_count = 0;
+    // Modules are swept in repeated passes rather than one alphabetical walk —
+    // see Sweep for why alphabetical order is not migration order. Retrying is
+    // safe and cheap because applied migrations are recorded and skipped on the
+    // next attempt.
+    let progress_db = DbConnectionParams::from_url(&db_url).ok();
+    let applied_so_far = |module: &str| -> i32 {
+        progress_db
+            .as_ref()
+            .and_then(|db| get_applied_migration_count(db, module).ok())
+            .unwrap_or(0)
+    };
 
-    for module in &modules {
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("📦 Module: {}", module.bright_yellow().bold());
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    let mut sweep = Sweep::new(modules.clone());
 
-        match run_migrations(module, Some(&db_url)).await {
-            Ok(_) => {
-                success_count += 1;
-            }
-            Err(e) => {
-                eprintln!("   ❌ Error: {}", e);
-                error_count += 1;
-            }
+    loop {
+        let pending = sweep.pending();
+        if pending.is_empty() {
+            break;
         }
-        println!();
+
+        if sweep.pass() > 1 {
+            println!(
+                "🔁 {} {} module(s) still pending — the last pass moved something, \
+                 so they may run now (pass {})",
+                "Retry:".bright_cyan().bold(),
+                pending.len().to_string().bright_yellow(),
+                sweep.pass()
+            );
+            println!();
+        }
+
+        for module in &pending {
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("📦 Module: {}", module.bright_yellow().bold());
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+            let before = applied_so_far(module);
+
+            match run_migrations(module, Some(&db_url)).await {
+                Ok(_) => sweep.record_success(module),
+                Err(e) => {
+                    eprintln!("   ❌ Error: {}", e);
+                    sweep.record_failure(module, &e.to_string(), applied_so_far(module) > before);
+                }
+            }
+            println!();
+        }
+
+        match sweep.finish_pass() {
+            PassVerdict::Retry => continue,
+            PassVerdict::Done | PassVerdict::Stop => break,
+        }
     }
 
     // Summary
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📊 {} Summary:", "Migration".bright_white().bold());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("   ✅ Successful: {}", success_count.to_string().bright_green());
-    if error_count > 0 {
-        println!("   ❌ Failed: {}", error_count.to_string().bright_red());
+    println!("   ✅ Successful: {}", sweep.succeeded().len().to_string().bright_green());
+
+    // Name the modules that only succeeded on a retry: that is a dependency the
+    // manifest does not declare, and it is worth seeing.
+    let deferred = sweep.deferred();
+    if !deferred.is_empty() {
+        println!("   🔁 Applied after a retry (blocked on a sibling module):");
+        for (module, p) in deferred {
+            println!("      • {} (pass {})", module.bright_yellow(), p);
+        }
+    }
+
+    if !skipped.is_empty() {
+        println!("   ⏭️  Skipped, no SQL migrations of their own: {}", skipped.join(", "));
+    }
+
+    let failures = sweep.failures();
+    if !failures.is_empty() {
+        println!("   ❌ Failed: {}", failures.len().to_string().bright_red());
+        for (module, error) in failures {
+            println!("      • {}: {}", module.bright_yellow(), error.lines().next().unwrap_or(""));
+        }
     }
     println!();
 
-    if error_count > 0 {
-        Err(anyhow::anyhow!("{} module(s) failed to migrate", error_count))
+    if !failures.is_empty() {
+        Err(anyhow::anyhow!(
+            "{} module(s) failed to migrate: {}",
+            failures.len(),
+            failures.iter().map(|(m, _)| m.as_str()).collect::<Vec<_>>().join(", ")
+        ))
     } else {
         println!("🎉 {} All migrations completed successfully!", "Done!".bright_green().bold());
         Ok(())
@@ -2687,6 +2904,10 @@ async fn show_migration_status(module_filter: Option<&str>, database_url: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The env-var helper moved to crate::utils and is not re-exported here, so
+    // `use super::*` does not reach it. Without this the whole test binary
+    // fails to compile, which silently took every test in this crate with it.
+    use crate::utils::expand_env_vars;
 
     #[test]
     fn test_to_snake_case() {
@@ -2821,5 +3042,123 @@ mod tests {
         assert_eq!(get_columns_for_table("users"), "(id, email, username, password_hash, email_verified, metadata)");
         assert_eq!(get_columns_for_table("permissions"), "(id, name, description, resource, action, metadata)");
         assert_eq!(get_columns_for_table("unknown"), "(id, name, description, metadata)");
+    }
+
+    // ---- Sweep: the pass scheduler behind `migration run-all` -------------
+    //
+    // The runner itself needs a database, so these drive the scheduler
+    // directly: each test plays the part of a pass's results.
+
+    fn modules(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn a_clean_sweep_finishes_in_one_pass() {
+        let mut sweep = Sweep::new(modules(&["backbone-accounting", "backbone-auditlog"]));
+        for module in sweep.pending() {
+            sweep.record_success(&module);
+        }
+        assert_eq!(sweep.finish_pass(), PassVerdict::Done);
+        assert_eq!(sweep.succeeded().len(), 2);
+        assert!(sweep.deferred().is_empty());
+        assert!(sweep.failures().is_empty());
+    }
+
+    #[test]
+    fn a_module_blocked_by_a_sibling_is_applied_on_the_retry() {
+        let mut sweep = Sweep::new(modules(&["backbone-accounting", "backbone-auditlog"]));
+
+        // Pass 1: accounting's audit triggers need a function auditlog has not
+        // created yet, and auditlog sorts after it.
+        sweep.record_failure(
+            "backbone-accounting",
+            "ERROR: schema \"auditlog\" does not exist",
+            false,
+        );
+        sweep.record_success("backbone-auditlog");
+        assert_eq!(sweep.finish_pass(), PassVerdict::Retry);
+        assert_eq!(sweep.pending(), modules(&["backbone-accounting"]));
+        assert_eq!(sweep.pass(), 2);
+
+        // Pass 2: the schema is there now.
+        sweep.record_success("backbone-accounting");
+        assert_eq!(sweep.finish_pass(), PassVerdict::Done);
+
+        assert!(sweep.failures().is_empty(), "the first-pass failure must not linger");
+        let deferred = sweep.deferred();
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred[0].0, "backbone-accounting");
+        assert_eq!(deferred[0].1, 2, "it should be reported as applied on pass 2");
+    }
+
+    #[test]
+    fn a_real_failure_stops_instead_of_retrying_forever() {
+        let mut sweep = Sweep::new(modules(&["backbone-accounting", "backbone-auditlog"]));
+
+        sweep.record_failure("backbone-accounting", "ERROR: syntax error at or near", false);
+        sweep.record_success("backbone-auditlog");
+        assert_eq!(sweep.finish_pass(), PassVerdict::Retry);
+
+        // Nothing moved this time, so another pass would only reproduce it.
+        sweep.record_failure("backbone-accounting", "ERROR: syntax error at or near", false);
+        assert_eq!(sweep.finish_pass(), PassVerdict::Stop);
+
+        assert_eq!(sweep.failures().len(), 1);
+        assert_eq!(sweep.failures()[0].0, "backbone-accounting");
+        assert!(sweep.failures()[0].1.contains("syntax error"));
+    }
+
+    #[test]
+    fn a_lone_failing_module_is_not_retried_at_all() {
+        let mut sweep = Sweep::new(modules(&["backbone-accounting"]));
+        sweep.record_failure("backbone-accounting", "ERROR: relation does not exist", false);
+        assert_eq!(sweep.finish_pass(), PassVerdict::Stop);
+        assert_eq!(sweep.pass(), 1);
+    }
+
+    #[test]
+    fn partial_progress_counts_as_progress() {
+        let mut sweep = Sweep::new(modules(&["backbone-accounting"]));
+        // It applied part of its chain before hitting the blocked file, which
+        // may be enough to unblock a sibling on the next pass.
+        sweep.record_failure("backbone-accounting", "ERROR: schema does not exist", true);
+        assert_eq!(sweep.finish_pass(), PassVerdict::Retry);
+    }
+
+    #[test]
+    fn the_sweep_stops_at_the_pass_budget() {
+        let mut sweep = Sweep::new(modules(&["a", "b"]));
+        let mut verdicts = Vec::new();
+        // A runner that keeps claiming progress without ever finishing.
+        for _ in 0..10 {
+            for module in sweep.pending() {
+                sweep.record_failure(&module, "still blocked", true);
+            }
+            let verdict = sweep.finish_pass();
+            verdicts.push(verdict);
+            if verdict != PassVerdict::Retry {
+                break;
+            }
+        }
+        assert_eq!(verdicts.last(), Some(&PassVerdict::Stop));
+        assert!(verdicts.len() <= 4, "two modules must not cost more than a few passes");
+        assert_eq!(sweep.failures().len(), 2);
+    }
+
+    #[test]
+    fn every_still_failing_module_is_reported() {
+        let mut sweep = Sweep::new(modules(&["a", "b", "c"]));
+        sweep.record_success("a");
+        sweep.record_failure("b", "boom", false);
+        sweep.record_failure("c", "bang", false);
+        assert_eq!(sweep.finish_pass(), PassVerdict::Retry);
+
+        sweep.record_failure("b", "boom", false);
+        sweep.record_failure("c", "bang", false);
+        assert_eq!(sweep.finish_pass(), PassVerdict::Stop);
+
+        let names: Vec<&str> = sweep.failures().iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(names, vec!["b", "c"]);
     }
 }

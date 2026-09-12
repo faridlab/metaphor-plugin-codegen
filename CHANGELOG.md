@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `migration run-all` no longer depends on alphabetical luck. Modules were applied
+  in name order, which is not migration order: a module's migrations can need
+  database objects another module creates, and nothing in the manifest says so —
+  an accounting module's audit triggers call a function an auditlog module owns,
+  and auditlog sorts after it. On any database where the dependency had not been
+  applied yet, the earlier module simply failed. The sweep now runs what is
+  pending and retries whatever failed for as long as the previous pass moved
+  something forward, so a module blocked only by a sibling is applied once that
+  sibling has run. When a pass advances nothing, the remaining failures are
+  reported and the command exits non-zero. Retrying is safe because applied
+  migrations are recorded and skipped. The summary names any module that needed a
+  retry, which is how an undeclared dependency becomes visible.
+- A project whose `migrations/` holds no SQL of its own — only a `manual/`
+  directory, for instance — is now skipped instead of counted as a failure, so a
+  sweep no longer reports an error that no action could clear.
+- The crate's unit tests compile again. A helper moved to `crate::utils` without
+  the test module's import following it, and because that broke the whole test
+  binary, every test in the crate stopped running rather than one failing
+  visibly.
+
+
 ## [0.2.0]
 
 ### Changed
