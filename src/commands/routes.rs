@@ -84,7 +84,11 @@ static RE_METHOD_CALL: Lazy<Regex> = Lazy::new(|| {
 static RE_BACKBONE_CRUD: Lazy<Regex> = Lazy::new(|| {
     // BackboneCrudHandler::<...>::routes(service, "/base")
     // Also catches simpler BackboneCrudHandler::routes(service, "/base")
-    Regex::new(r#"BackboneCrudHandler(?:::<[^>]*>)?::routes\s*\([^,]*,\s*"([^"]+)"\s*\)"#)
+    // The trailing comma is not optional in practice: rustfmt writes one on
+    // every multi-line call, which is how all of the real call sites are
+    // formatted. Without `,?` this pattern matched none of them and the route
+    // inventory silently reported zero CRUD endpoints for the whole estate.
+    Regex::new(r#"BackboneCrudHandler(?:::<[^>]*>)?::routes\s*\([^,]*,\s*"([^"]+)"\s*,?\s*\)"#)
         .expect("RE_BACKBONE_CRUD is valid")
 });
 

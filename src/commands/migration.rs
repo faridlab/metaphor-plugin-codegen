@@ -2963,16 +2963,19 @@ mod tests {
     fn test_sanitize_db_url_with_password() {
         let url = "postgresql://root:secret@localhost:5432/bersihirdb";
         let result = sanitize_db_url(url);
-        // URL parsing doesn't include port when it's the default
-        assert_eq!(result, "postgresql://root:***@localhost/bersihirdb");
+        // Only the password is touched; everything else survives byte for byte.
+        // The port in particular must stay — a workspace routinely runs more
+        // than one database, and 5432 against 5433 is the whole difference
+        // between the app's data and a scratch cluster.
+        assert_eq!(result, "postgresql://root:***@localhost:5432/bersihirdb");
     }
 
     #[test]
     fn test_sanitize_db_url_without_password() {
         let url = "postgresql://localhost:5432/bersihirdb";
         let result = sanitize_db_url(url);
-        // URL parsing doesn't include port when it's the default
-        assert_eq!(result, "postgresql://localhost/bersihirdb");
+        // Nothing to redact, so the URL is returned unchanged.
+        assert_eq!(result, "postgresql://localhost:5432/bersihirdb");
     }
 
     #[test]

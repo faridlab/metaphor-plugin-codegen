@@ -5,6 +5,21 @@ All notable changes to `metaphor-codegen` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3]
+
+### Fixed
+
+- `metaphor routes` finds the CRUD handlers again. The pattern matching
+  `BackboneCrudHandler::<..>::routes(service, "/base")` did not allow the
+  trailing comma rustfmt writes on every multi-line call, which is how all 511
+  call sites across the module estate are formatted — so the inventory silently
+  reported none of them. On one module the route count goes from 14 to 134.
+- The two `sanitize_db_url` expectations describe the function as it is. They
+  were written against an older implementation that parsed and reassembled the
+  URL, dropping a default port; the current one redacts the password and leaves
+  everything else byte for byte. Keeping the port matters here, where 5432 and
+  5433 are different databases.
+
 ## [0.2.2]
 
 ### Fixed
