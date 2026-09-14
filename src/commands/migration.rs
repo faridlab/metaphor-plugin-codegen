@@ -97,6 +97,13 @@ pub enum MigrationAction {
         force: bool,
     },
     /// Run pending migrations for ALL registered modules
+    /// Seed EVERY discovered module, the way RunAll migrates every module.
+    /// Without this, seeding the estate meant one invocation per module — 57 of
+    /// them — which is why it was never done.
+    SeedAll {
+        /// Database URL (defaults to DATABASE_URL env var)
+        database_url: Option<String>,
+    },
     RunAll {
         /// Database URL (defaults to DATABASE_URL env var)
         database_url: Option<String>,
@@ -158,6 +165,9 @@ pub async fn handle_command(action: &MigrationAction) -> Result<()> {
                 Some(env) => run_all_migrations_remote(env, *yes),
                 None => run_all_migrations(database_url.as_deref()).await,
             }
+        }
+        MigrationAction::SeedAll { database_url } => {
+            seed_all_modules(database_url.as_deref()).await
         }
         MigrationAction::Status { module, database_url } => {
             show_migration_status(module.as_deref(), database_url.as_deref()).await
@@ -1398,6 +1408,35 @@ impl DbConnectionParams {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// Execute a SQL file using psql, binding psql variables.
+    ///
+    /// A script that references `:'name'` cannot run without its binding: psql
+    /// reports a syntax error at the colon, which names neither the variable
+    /// nor the fact that one is missing.
+    fn execute_file_with_vars(&self, file_path: &Path, vars: &[(&str, &str)]) -> Result<()> {
+        let mut cmd = std::process::Command::new("psql");
+        cmd.env("PGPASSWORD", &self.password).args([
+            "-h", &self.host,
+            "-p", &self.port.to_string(),
+            "-U", &self.user,
+            "-d", &self.database,
+            "-f", file_path.to_str().unwrap(),
+            "-q",
+            "-v", "ON_ERROR_STOP=1",
+        ]);
+        for (name, value) in vars {
+            cmd.arg("-v").arg(format!("{name}={value}"));
+        }
+        let output = cmd.output()?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(())
+    }
+
     /// Execute a SQL file using psql
     fn execute_file(&self, file_path: &Path) -> Result<()> {
         let output = std::process::Command::new("psql")
@@ -1425,6 +1464,60 @@ impl DbConnectionParams {
 
         Ok(())
     }
+}
+
+/// The seed names a module declares an explicit order for, from
+/// `migrations/seeds/seed_order.yml`. `None` when the module declares none.
+fn read_seed_order(seeds_dir: &Path) -> Option<Vec<String>> {
+    let content = fs::read_to_string(seeds_dir.join("seed_order.yml")).ok()?;
+    let names: Vec<String> = content
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("- "))
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    (!names.is_empty()).then_some(names)
+}
+
+/// The seed ledger, mirroring `schema_migrations`.
+///
+/// Seeds were re-runnable only if every file remembered `ON CONFLICT`, and most
+/// did not — re-running the province seed duplicated all of its rows. That made
+/// the step unsafe, so it was avoided, so it never ran. A ledger makes the
+/// safety structural instead of per-file: a seed applies once, whatever it
+/// says.
+fn ensure_schema_seeds_table(db: &DbConnectionParams) -> Result<()> {
+    db.execute_query(
+        r#"
+        CREATE TABLE IF NOT EXISTS public.schema_seeds (
+            id SERIAL PRIMARY KEY,
+            module VARCHAR(100) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            applied_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+            UNIQUE(module, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_schema_seeds_module ON public.schema_seeds(module);
+        "#,
+    )?;
+    Ok(())
+}
+
+fn is_seed_applied(db: &DbConnectionParams, module: &str, seed: &str) -> Result<bool> {
+    let out = db.execute_query_with_vars(
+        "SELECT COUNT(*) FROM public.schema_seeds WHERE module = :'module' AND name = :'seed'",
+        &[("module", module), ("seed", seed)],
+    )?;
+    Ok(out.trim().parse::<i64>().unwrap_or(0) > 0)
+}
+
+fn record_seed(db: &DbConnectionParams, module: &str, seed: &str) -> Result<()> {
+    db.execute_query_with_vars(
+        "INSERT INTO public.schema_seeds (module, name) VALUES (:'module', :'seed') \
+         ON CONFLICT (module, name) DO NOTHING",
+        &[("module", module), ("seed", seed)],
+    )?;
+    Ok(())
 }
 
 /// Ensure the schema_migrations table exists
@@ -1579,7 +1672,8 @@ async fn run_seeders(module: &str, name: Option<&str>, force: bool, database_url
     // Check for SQL seed files first (preferred for simplicity)
     if seeds_dir.exists() {
         println!("   📂 Found SQL seeds directory: {}", seeds_dir.display());
-        return run_sql_seeds(&seeds_dir, name, &db_url).await;
+        run_sql_seeds(module, &seeds_dir, name, &db_url).await?;
+        return Ok(());
     }
 
     // Fall back to Rust seeder binary
@@ -1651,7 +1745,12 @@ async fn run_seeders(module: &str, name: Option<&str>, force: bool, database_url
 }
 
 /// Run SQL seed files from seeds directory
-async fn run_sql_seeds(seeds_dir: &Path, name: Option<&str>, database_url: &str) -> Result<()> {
+async fn run_sql_seeds(
+    module: &str,
+    seeds_dir: &Path,
+    name: Option<&str>,
+    database_url: &str,
+) -> Result<SeedTally> {
     // Parse database URL to get connection parameters
     let url = url::Url::parse(database_url)?;
     let host = url.host_str().unwrap_or("localhost");
@@ -1675,9 +1774,31 @@ async fn run_sql_seeds(seeds_dir: &Path, name: Option<&str>, database_url: &str)
         .collect();
     entries.sort_by_key(|e| e.file_name());
 
+    // A module may declare its own order in `seed_order.yml`, and several do
+    // because their seeds carry foreign keys to one another — geo's cities
+    // reference provinces. Alphabetical order put the child first and the
+    // insert failed on the key. Names listed there run in that order; anything
+    // unlisted follows, alphabetically, as the file itself documents.
+    if let Some(order) = read_seed_order(seeds_dir) {
+        let rank = |name: &str| -> usize {
+            let stem = name.trim_end_matches(".sql");
+            order
+                .iter()
+                .position(|o| o == stem)
+                .unwrap_or(usize::MAX)
+        };
+        entries.sort_by(|a, b| {
+            let (an, bn) = (
+                a.file_name().to_string_lossy().to_string(),
+                b.file_name().to_string_lossy().to_string(),
+            );
+            rank(&an).cmp(&rank(&bn)).then(an.cmp(&bn))
+        });
+    }
+
     if entries.is_empty() {
         println!("   (no seed files found)");
-        return Ok(());
+        return Ok(SeedTally::default());
     }
 
     // Filter by name if specified
@@ -1690,9 +1811,67 @@ async fn run_sql_seeds(seeds_dir: &Path, name: Option<&str>, database_url: &str)
 
     println!("   📋 Running {} seed file(s)", entries.len());
 
+    let db = DbConnectionParams::from_url(database_url)?;
+    ensure_schema_seeds_table(&db)?;
+    let mut tally = SeedTally::default();
+
     for entry in entries {
         let filename = entry.file_name();
-        println!("   ⏳ Seeding {}...", filename.to_string_lossy().bright_white());
+        let seed_name = filename.to_string_lossy().to_string();
+
+        // A seed applies once. Without the ledger, re-running duplicated every
+        // row of any file that did not carry ON CONFLICT.
+        if is_seed_applied(&db, module, &seed_name)? {
+            tally.skipped += 1;
+            continue;
+        }
+
+        // A template whose INSERT is still commented out is not a seed that
+        // failed — it is one nobody has written yet. Counting it as applied
+        // would hide that; counting it as an error would drown the ones that
+        // are real.
+        let body = fs::read_to_string(entry.path()).unwrap_or_default();
+
+        // `-- SEED: none` marks a table that deliberately has no global seed —
+        // per-company data installed by a verb, for instance. That is a decision
+        // rather than a gap, so it is not counted among the unwritten templates.
+        if body.lines().any(|l| l.trim_start().starts_with("-- SEED: none")) {
+            tally.declared_none += 1;
+            continue;
+        }
+        let has_rows = body
+            .lines()
+            .map(str::trim_start)
+            .any(|l| {
+                !l.starts_with("--")
+                    && (l.to_ascii_uppercase().starts_with("INSERT")
+                        || l.to_ascii_uppercase().starts_with("COPY"))
+            });
+        if !has_rows {
+            tally.empty += 1;
+            continue;
+        }
+
+        println!("   ⏳ Seeding {}...", seed_name.bright_white());
+
+        // Bind the tenant root before the file runs.
+        //
+        // Reference data is shared: one list of religions, banks or maintenance
+        // stages that every scope reads. Under a composed tenancy decorator the
+        // fill trigger stamps a row with the session's acting unit, and a seed
+        // run through psql has no session scope — so the column stayed NULL and
+        // the kind guard refused the insert. Binding it here keeps the seed
+        // files themselves free of tenancy, which is the whole point of the
+        // modules carrying none.
+        //
+        // Each -c shares one psql session with the -f that follows, so a
+        // session-level set_config reaches the file.
+        let bind_root = "SELECT set_config('app.acting_unit_id', \
+             (SELECT id::text FROM organization.org_units \
+               WHERE kind = 'root' AND parent_id IS NULL ORDER BY id LIMIT 1), false), \
+            set_config('app.scope_unit_ids', \
+             (SELECT id::text FROM organization.org_units \
+               WHERE kind = 'root' AND parent_id IS NULL ORDER BY id LIMIT 1), false)";
 
         let output = std::process::Command::new("psql")
             .env("PGPASSWORD", password)
@@ -1701,6 +1880,7 @@ async fn run_sql_seeds(seeds_dir: &Path, name: Option<&str>, database_url: &str)
                 "-p", &port.to_string(),
                 "-U", user,
                 "-d", database,
+                "-c", bind_root,
                 "-f", entry.path().to_str().unwrap(),
                 "-q",  // Quiet mode
                 // Abort on the FIRST failing statement: without this psql
@@ -1714,15 +1894,28 @@ async fn run_sql_seeds(seeds_dir: &Path, name: Option<&str>, database_url: &str)
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!("   ❌ Failed: {}", stderr);
-            return Err(anyhow::anyhow!("Seed {} failed", filename.to_string_lossy()));
+            return Err(anyhow::anyhow!("Seed {seed_name} failed: {stderr}"));
         }
 
-        println!("   ✅ {}", filename.to_string_lossy());
+        // Recorded only after psql exits clean, so a half-applied file is never
+        // marked done and skipped forever after.
+        record_seed(&db, module, &seed_name)?;
+        tally.applied += 1;
+        println!("   ✅ {}", seed_name);
     }
 
-    println!();
-    println!("✅ {} All seeds applied!", "Done!".bright_green());
-    Ok(())
+    Ok(tally)
+}
+
+/// What one module's seed sweep did.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct SeedTally {
+    pub applied: usize,
+    pub skipped: usize,
+    /// Files that are still generator templates with nothing to insert.
+    pub empty: usize,
+    /// Files that declare, deliberately, that this table gets no global seed.
+    pub declared_none: usize,
 }
 
 /// Parse package name from Cargo.toml content
@@ -2363,29 +2556,86 @@ fn read_workspace_projects() -> Option<(std::path::PathBuf, Vec<(String, std::pa
 /// Paths are resolved against the workspace root. `None` means no manifest;
 /// an empty vector means a manifest that declares nothing, which is the normal
 /// state for a project that owns no grant surface.
-fn read_post_apply_scripts() -> Option<Vec<std::path::PathBuf>> {
+fn read_post_apply_scripts() -> Option<Vec<PostApplyScript>> {
     post_apply_scripts_in(&find_workspace_root()?)
 }
 
 /// The parsing half of [`read_post_apply_scripts`], split out so it can be
 /// exercised against a fixture directory instead of the process's cwd.
-fn post_apply_scripts_in(workspace_root: &Path) -> Option<Vec<std::path::PathBuf>> {
+fn post_apply_scripts_in(workspace_root: &Path) -> Option<Vec<PostApplyScript>> {
     let content = fs::read_to_string(workspace_root.join("metaphor.yaml")).ok()?;
     let yaml: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
-    let declared = match yaml.get("migrations").and_then(|m| m.get("post_apply")) {
+    let migrations = yaml.get("migrations");
+    let declared = match migrations.and_then(|m| m.get("post_apply")) {
         // A key that is present but not a list is a malformed declaration, not
         // an empty one — surface it as "no manifest answer" so the caller does
         // not read silence as "nothing declared".
         Some(v) => v.as_sequence()?,
         None => return Some(Vec::new()),
     };
-    Some(
-        declared
-            .iter()
-            .filter_map(|entry| entry.as_str())
-            .map(|rel| workspace_root.join(rel))
-            .collect(),
-    )
+
+    // A file the workspace names as the source for `${VAR}` placeholders, so a
+    // declaration is self-contained instead of depending on what the operator
+    // happened to export.
+    let env_file = migrations
+        .and_then(|m| m.get("env_file"))
+        .and_then(|v| v.as_str())
+        .map(|rel| workspace_root.join(rel));
+
+    let resolve = |raw: &str| -> String {
+        let mut out = raw.to_string();
+        if let Some(ref ef) = env_file {
+            let ef = ef.to_string_lossy().to_string();
+            // Substitute from the declared env file first; anything it does not
+            // answer falls through to the process environment.
+            while let Some(start) = out.find("${") {
+                let Some(end) = out[start..].find('}').map(|e| start + e) else { break };
+                let key = &out[start + 2..end];
+                let value = crate::utils::get_env_value(&ef, key)
+                    .or_else(|| std::env::var(key).ok())
+                    .unwrap_or_default();
+                out.replace_range(start..=end, &value);
+            }
+        }
+        crate::utils::expand_env_vars(&out)
+    };
+
+    let mut scripts = Vec::new();
+    for entry in declared {
+        // Two forms: a bare path, or a mapping carrying the psql variables the
+        // script expects. A script that reads `:'app_role'` cannot run without
+        // them, and psql's failure on the missing binding is a syntax error
+        // that names none of this.
+        let (rel, vars) = if let Some(rel) = entry.as_str() {
+            (rel.to_string(), Vec::new())
+        } else {
+            let map = entry.as_mapping()?;
+            let rel = map
+                .get(serde_yaml::Value::String("path".into()))
+                .and_then(|v| v.as_str())?
+                .to_string();
+            let vars = match map.get(serde_yaml::Value::String("vars".into())) {
+                Some(v) => v
+                    .as_mapping()?
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        Some((k.as_str()?.to_string(), resolve(v.as_str()?)))
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            (rel, vars)
+        };
+        scripts.push(PostApplyScript { path: workspace_root.join(rel), vars });
+    }
+    Some(scripts)
+}
+
+/// One declared post-apply script and the psql variables it is run with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PostApplyScript {
+    path: std::path::PathBuf,
+    vars: Vec<(String, String)>,
 }
 
 /// Run the workspace's declared post-apply scripts against `db_url`.
@@ -2410,17 +2660,22 @@ fn run_post_apply_scripts(db_url: &str) -> Result<()> {
 
     let db = DbConnectionParams::from_url(db_url)?;
     for script in &scripts {
-        if !script.is_file() {
+        if !script.path.is_file() {
             return Err(anyhow::anyhow!(
                 "migrations.post_apply names a script that does not exist: {} \
                  — fix the path in metaphor.yaml, or drop the entry if the script is gone",
-                script.display()
+                script.path.display()
             ));
         }
-        db.execute_file(script).map_err(|e| {
-            anyhow::anyhow!("post-apply script {} failed: {}", script.display(), e)
+        let vars: Vec<(&str, &str)> = script
+            .vars
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        db.execute_file_with_vars(&script.path, &vars).map_err(|e| {
+            anyhow::anyhow!("post-apply script {} failed: {}", script.path.display(), e)
         })?;
-        println!("   ✅ {}", script.display().to_string().bright_white());
+        println!("   ✅ {}", script.path.display().to_string().bright_white());
     }
     println!();
     Ok(())
@@ -2871,6 +3126,85 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
     }
 }
 
+/// Seed every discovered module against one database.
+pub async fn seed_all_modules(database_url: Option<&str>) -> Result<()> {
+    println!("🌱 {} seeding ALL modules...", "Starting".bright_green().bold());
+    println!();
+
+    let db_url = resolve_database_url(database_url)?;
+    println!("   🔗 Database: {}...", sanitize_db_url(&db_url).bright_white());
+    println!();
+
+    let modules = discover_modules()?;
+    if modules.is_empty() {
+        println!("   ⚠️  No projects found");
+        return Ok(());
+    }
+
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    let mut empty = 0usize;
+    let mut declared_none = 0usize;
+    let mut failures: Vec<(String, String)> = Vec::new();
+    let mut touched: Vec<(String, usize)> = Vec::new();
+
+    for module in &modules {
+        let seeds_dir = module_base_path(module).join("migrations/seeds");
+        if !seeds_dir.exists() {
+            continue;
+        }
+        match run_sql_seeds(module, &seeds_dir, None, &db_url).await {
+            Ok(t) => {
+                applied += t.applied;
+                skipped += t.skipped;
+                empty += t.empty;
+                declared_none += t.declared_none;
+                if t.applied > 0 {
+                    touched.push((module.clone(), t.applied));
+                }
+            }
+            Err(e) => failures.push((module.clone(), e.to_string())),
+        }
+    }
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("📊 {} Summary:", "Seeding".bright_white().bold());
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("   ✅ Applied: {}", applied.to_string().bright_green());
+    for (module, n) in &touched {
+        println!("      • {} ({})", module.bright_yellow(), n);
+    }
+    println!("   ⏭️  Already applied: {}", skipped.to_string().bright_white());
+    // Named rather than hidden: an empty template is a seed nobody has written,
+    // and the count is the honest size of that gap.
+    println!(
+        "   📝 Still empty templates: {}",
+        empty.to_string().bright_yellow()
+    );
+    println!(
+        "   🚫 Declared no global seed: {}",
+        declared_none.to_string().bright_white()
+    );
+    if !failures.is_empty() {
+        println!("   ❌ Failed: {}", failures.len().to_string().bright_red());
+        for (module, err) in &failures {
+            println!("      • {}: {}", module.bright_yellow(), err.lines().next().unwrap_or(""));
+        }
+    }
+    println!();
+
+    if failures.is_empty() {
+        println!("🎉 {} Seeding complete", "Done!".bright_green().bold());
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{} module(s) failed to seed: {}",
+            failures.len(),
+            failures.iter().map(|(m, _)| m.as_str()).collect::<Vec<_>>().join(", ")
+        ))
+    }
+}
+
 /// Show migration status for all modules
 async fn show_migration_status(module_filter: Option<&str>, database_url: Option<&str>) -> Result<()> {
     println!("📊 {} Migration Status", "Checking".bright_cyan());
@@ -3029,10 +3363,11 @@ mod tests {
         );
         let scripts = post_apply_scripts_in(ws.path()).expect("manifest parses");
         assert_eq!(
-            scripts,
+            scripts.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
             vec![ws.path().join("apps/svc/scripts/grants.sql")],
             "a declared path is relative to the workspace root, not to cwd"
         );
+        assert!(scripts[0].vars.is_empty(), "a bare path declares no variables");
     }
 
     #[test]
@@ -3042,6 +3377,18 @@ mod tests {
             post_apply_scripts_in(ws.path()),
             Some(Vec::new()),
             "a workspace that owns no grant surface declares nothing, which is not an error"
+        );
+
+        // and the mapping form carries the psql variables the script needs
+        let ws2 = workspace_with_manifest(
+            "migrations:\n  post_apply:\n    - path: scripts/grants.sql\n      vars:\n        app_role: sherpa_app\n",
+        );
+        let scripts = post_apply_scripts_in(ws2.path()).expect("mapping form parses");
+        assert_eq!(scripts[0].path, ws2.path().join("scripts/grants.sql"));
+        assert_eq!(
+            scripts[0].vars,
+            vec![("app_role".to_string(), "sherpa_app".to_string())],
+            "a script that references :'app_role' cannot run without its binding"
         );
     }
 

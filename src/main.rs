@@ -186,6 +186,12 @@ enum CliMigrationAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Seed ALL registered modules. Seeding one module at a time meant one
+    /// invocation per module, which is why the step was never run.
+    SeedAll {
+        #[arg(long)]
+        database_url: Option<String>,
+    },
     /// Show migration status for all modules
     Status {
         #[arg(long, short)]
@@ -236,6 +242,9 @@ impl From<&CliMigrationAction> for MigrationAction {
                 database_url: database_url.clone(),
                 target: target.clone(),
                 yes: *yes,
+            },
+            CliMigrationAction::SeedAll { database_url } => MigrationAction::SeedAll {
+                database_url: database_url.clone(),
             },
             CliMigrationAction::Status { module, database_url } => MigrationAction::Status {
                 module: module.clone(), database_url: database_url.clone(),
