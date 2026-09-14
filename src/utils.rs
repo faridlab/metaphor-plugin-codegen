@@ -33,7 +33,7 @@ static ENV_VAR_REGEX: Lazy<Regex> = Lazy::new(|| {
 ///
 /// # Example
 /// ```no_run
-/// use metaphor_cli::utils::get_database_url;
+/// use metaphor_codegen::utils::get_database_url;
 ///
 /// if let Some(url) = get_database_url() {
 ///     println!("Using database: {}", url);
@@ -100,7 +100,7 @@ pub fn get_database_url() -> Option<String> {
 ///
 /// # Examples
 /// ```no_run
-/// use metaphor_cli::utils::expand_env_vars;
+/// use metaphor_codegen::utils::expand_env_vars;
 /// use std::env;
 ///
 /// env::set_var("HOST", "localhost");
@@ -208,7 +208,7 @@ pub fn validate_entity_name(name: &str) -> anyhow::Result<()> {
 ///
 /// # Example
 /// ```no_run
-/// use metaphor_cli::utils::sanitize_db_url;
+/// use metaphor_codegen::utils::sanitize_db_url;
 ///
 /// let url = "postgresql://user:secret@localhost:5432/db";
 /// assert_eq!(sanitize_db_url(url), "postgresql://user:***@localhost:5432/db");

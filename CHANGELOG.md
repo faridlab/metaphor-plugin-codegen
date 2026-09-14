@@ -5,6 +5,35 @@ All notable changes to `metaphor-codegen` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4]
+
+### Added
+
+- A workspace can declare SQL to run after every migration apply, under
+  `migrations.post_apply` in `metaphor.yaml`. Paths resolve against the
+  workspace root and run as the role that applied the migrations — the role
+  that owns the new objects and can therefore grant on them. Both
+  `metaphor migration run` and `metaphor migration run-all` honour it; the
+  sweep runs the scripts once at the end rather than once per module.
+
+  This closes a silent failure. A migration that creates a schema grants
+  nothing on it, and the application connects as a different role, so a newly
+  created schema stayed invisible to the running service until someone
+  remembered to re-run the project's grant script by hand. Forgetting produced
+  no signal at migrate time and surfaced later as `permission denied for
+  schema ...` from the service.
+
+  A declared script that is missing, or that fails, fails the command. A typo
+  that silently did nothing would restore exactly the silence the hook removes.
+  The scripts run even when some module failed to migrate, because the schemas
+  that did land still need their grants.
+
+### Fixed
+
+- The `utils` doc examples compile. They imported from `metaphor_cli`, a crate
+  name this library does not have, so all three doctests failed; the library
+  target is `metaphor_codegen`.
+
 ## [0.2.3]
 
 ### Fixed

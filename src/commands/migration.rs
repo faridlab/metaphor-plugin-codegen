@@ -135,7 +135,13 @@ pub async fn handle_command(action: &MigrationAction) -> Result<()> {
             diff_entity_migration(entity, module).await
         }
         MigrationAction::Run { module, database_url } => {
-            run_migrations(module, database_url.as_deref()).await
+            run_migrations(module, database_url.as_deref()).await?;
+            // The grant refresh belongs to the apply, not to the operator's
+            // memory — see run_post_apply_scripts. Resolved here rather than
+            // inside run_migrations so a whole-workspace sweep runs the
+            // scripts once at the end instead of once per module.
+            let db_url = resolve_database_url(database_url.as_deref())?;
+            run_post_apply_scripts(&db_url)
         }
         MigrationAction::Seed { module, name, force, database_url } => {
             run_seeders(module, name.as_deref(), *force, database_url.as_deref()).await
@@ -2291,20 +2297,38 @@ fn parse_struct_literal(item: &str) -> Vec<(String, String)> {
 // Run All Migrations (Multi-Module)
 // ============================================================================
 
+/// The database URL, in the order a caller expects it to win: an explicit
+/// flag, then the environment, then the project's own config.
+fn resolve_database_url(database_url: Option<&str>) -> Result<String> {
+    database_url
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("DATABASE_URL").ok())
+        .or_else(crate::utils::get_database_url)
+        .ok_or_else(|| anyhow::anyhow!(
+            "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var (or add it to .env), or configure database.url in config/application.yml"
+        ))
+}
+
+/// Walk up from cwd to the directory holding `metaphor.yaml`. `None` when the
+/// caller is outside any workspace, which is a normal state for the legacy
+/// `libs/modules/` layout rather than an error.
+fn find_workspace_root() -> Option<std::path::PathBuf> {
+    let start = std::env::current_dir().ok()?;
+    let mut dir: &Path = &start;
+    loop {
+        if dir.join("metaphor.yaml").is_file() {
+            return Some(dir.to_path_buf());
+        }
+        dir = dir.parent()?;
+    }
+}
+
 /// Locate `metaphor.yaml` by walking up from cwd. Returns the workspace root
 /// (directory containing the manifest) and the parsed `projects:` list as
 /// `(name, path)` pairs. Paths are absolute, resolved against the workspace root.
 fn read_workspace_projects() -> Option<(std::path::PathBuf, Vec<(String, std::path::PathBuf)>)> {
-    let start = std::env::current_dir().ok()?;
-    let mut dir: &Path = &start;
-    let manifest_path = loop {
-        let candidate = dir.join("metaphor.yaml");
-        if candidate.is_file() {
-            break candidate;
-        }
-        dir = dir.parent()?;
-    };
-    let workspace_root = manifest_path.parent()?.to_path_buf();
+    let workspace_root = find_workspace_root()?;
+    let manifest_path = workspace_root.join("metaphor.yaml");
 
     let content = fs::read_to_string(&manifest_path).ok()?;
     let yaml: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
@@ -2317,6 +2341,89 @@ fn read_workspace_projects() -> Option<(std::path::PathBuf, Vec<(String, std::pa
         out.push((name, workspace_root.join(path)));
     }
     Some((workspace_root, out))
+}
+
+/// The SQL scripts a workspace wants run after every migration apply, declared
+/// in `metaphor.yaml`:
+///
+/// ```yaml
+/// migrations:
+///   post_apply:
+///     - apps/<app>/scripts/grants.sql
+/// ```
+///
+/// Why this exists: a migration that creates a schema grants nothing on it.
+/// The role the application connects as is not the role migrations run as, so
+/// a freshly created schema is invisible to the application until someone
+/// re-runs the project's grant script by hand. Forgetting is silent at migrate
+/// time and shows up later as `permission denied for schema ...` from the
+/// running service. Declaring the script here makes the refresh part of the
+/// apply instead of a step a human has to remember.
+///
+/// Paths are resolved against the workspace root. `None` means no manifest;
+/// an empty vector means a manifest that declares nothing, which is the normal
+/// state for a project that owns no grant surface.
+fn read_post_apply_scripts() -> Option<Vec<std::path::PathBuf>> {
+    post_apply_scripts_in(&find_workspace_root()?)
+}
+
+/// The parsing half of [`read_post_apply_scripts`], split out so it can be
+/// exercised against a fixture directory instead of the process's cwd.
+fn post_apply_scripts_in(workspace_root: &Path) -> Option<Vec<std::path::PathBuf>> {
+    let content = fs::read_to_string(workspace_root.join("metaphor.yaml")).ok()?;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    let declared = match yaml.get("migrations").and_then(|m| m.get("post_apply")) {
+        // A key that is present but not a list is a malformed declaration, not
+        // an empty one — surface it as "no manifest answer" so the caller does
+        // not read silence as "nothing declared".
+        Some(v) => v.as_sequence()?,
+        None => return Some(Vec::new()),
+    };
+    Some(
+        declared
+            .iter()
+            .filter_map(|entry| entry.as_str())
+            .map(|rel| workspace_root.join(rel))
+            .collect(),
+    )
+}
+
+/// Run the workspace's declared post-apply scripts against `db_url`.
+///
+/// Runs as whoever `db_url` names — the same role that just applied the
+/// migrations, which is the role that owns the objects and can therefore grant
+/// on them.
+///
+/// A declared script that is missing is an error, not a skip: the declaration
+/// is the contract, and silently ignoring a typo would restore exactly the
+/// silence this hook exists to remove.
+fn run_post_apply_scripts(db_url: &str) -> Result<()> {
+    let scripts = match read_post_apply_scripts() {
+        Some(scripts) if !scripts.is_empty() => scripts,
+        _ => return Ok(()),
+    };
+
+    println!("🔐 {} post-apply scripts ({})",
+        "Running".bright_cyan().bold(),
+        scripts.len().to_string().bright_yellow()
+    );
+
+    let db = DbConnectionParams::from_url(db_url)?;
+    for script in &scripts {
+        if !script.is_file() {
+            return Err(anyhow::anyhow!(
+                "migrations.post_apply names a script that does not exist: {} \
+                 — fix the path in metaphor.yaml, or drop the entry if the script is gone",
+                script.display()
+            ));
+        }
+        db.execute_file(script).map_err(|e| {
+            anyhow::anyhow!("post-apply script {} failed: {}", script.display(), e)
+        })?;
+        println!("   ✅ {}", script.display().to_string().bright_white());
+    }
+    println!();
+    Ok(())
 }
 
 /// Resolve the base directory for `module`. Prefers a project entry in
@@ -2627,14 +2734,7 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
     println!("🚀 {} Running migrations for ALL modules...", "Starting".bright_cyan().bold());
     println!();
 
-    // Get database URL from multiple sources with proper priority
-    let db_url = database_url
-        .map(|s| s.to_string())
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .or_else(crate::utils::get_database_url)
-        .ok_or_else(|| anyhow::anyhow!(
-            "DATABASE_URL not set. Provide --database-url, set DATABASE_URL env var (or add it to .env), or configure database.url in config/application.yml"
-        ))?;
+    let db_url = resolve_database_url(database_url)?;
 
     println!("   🔗 Database: {}...",
         sanitize_db_url(&db_url).bright_white()
@@ -2752,6 +2852,12 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
         }
     }
     println!();
+
+    // The grant refresh runs even when some module failed: the schemas that DID
+    // land still need their grants, and leaving them ungranted is the silent
+    // failure this hook exists to remove. It runs before the verdict so a
+    // failing hook is reported rather than masked by the migration error.
+    run_post_apply_scripts(&db_url)?;
 
     if !failures.is_empty() {
         Err(anyhow::anyhow!(
@@ -2908,6 +3014,52 @@ mod tests {
     // `use super::*` does not reach it. Without this the whole test binary
     // fails to compile, which silently took every test in this crate with it.
     use crate::utils::expand_env_vars;
+
+    /// A workspace fixture holding just a manifest.
+    fn workspace_with_manifest(manifest: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp workspace");
+        fs::write(dir.path().join("metaphor.yaml"), manifest).expect("write manifest");
+        dir
+    }
+
+    #[test]
+    fn post_apply_resolves_declared_scripts_against_the_workspace_root() {
+        let ws = workspace_with_manifest(
+            "projects: []\nmigrations:\n  post_apply:\n    - apps/svc/scripts/grants.sql\n",
+        );
+        let scripts = post_apply_scripts_in(ws.path()).expect("manifest parses");
+        assert_eq!(
+            scripts,
+            vec![ws.path().join("apps/svc/scripts/grants.sql")],
+            "a declared path is relative to the workspace root, not to cwd"
+        );
+    }
+
+    #[test]
+    fn post_apply_is_empty_when_the_manifest_declares_nothing() {
+        let ws = workspace_with_manifest("projects: []\n");
+        assert_eq!(
+            post_apply_scripts_in(ws.path()),
+            Some(Vec::new()),
+            "a workspace that owns no grant surface declares nothing, which is not an error"
+        );
+    }
+
+    #[test]
+    fn post_apply_reports_no_answer_when_the_declaration_is_malformed() {
+        let ws = workspace_with_manifest("migrations:\n  post_apply: scripts/grants.sql\n");
+        assert_eq!(
+            post_apply_scripts_in(ws.path()),
+            None,
+            "a scalar where a list belongs must not read as `nothing declared`"
+        );
+    }
+
+    #[test]
+    fn post_apply_reports_no_answer_without_a_manifest() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert_eq!(post_apply_scripts_in(dir.path()), None);
+    }
 
     #[test]
     fn test_to_snake_case() {
