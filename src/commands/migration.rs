@@ -3094,7 +3094,23 @@ pub async fn run_all_migrations(database_url: Option<&str>) -> Result<()> {
             match run_migrations(module, Some(&db_url)).await {
                 Ok(_) => sweep.record_success(module),
                 Err(e) => {
-                    eprintln!("   ❌ Error: {}", e);
+                    // Not an error yet. The sweep runs more passes precisely
+                    // because a module can be blocked on a sibling that has not
+                    // migrated, and most of these clear on the next pass. A red
+                    // "Error" here is the run crying wolf, and a run that cries
+                    // wolf teaches everyone to skim past the failure that is
+                    // real. The summary below is the authoritative verdict: it
+                    // separates "applied after a retry" from "never applied",
+                    // and only the latter is a failure.
+                    //
+                    // One line, not the whole psql stderr, which is mostly
+                    // NOTICEs and made a recoverable block look catastrophic.
+                    let first = e.to_string();
+                    let first = first
+                        .lines()
+                        .find(|l| l.contains("ERROR:"))
+                        .unwrap_or_else(|| first.lines().next().unwrap_or(""));
+                    println!("   ⏳ Deferred: {}", first.trim().bright_yellow());
                     sweep.record_failure(module, &e.to_string(), applied_so_far(module) > before);
                 }
             }
