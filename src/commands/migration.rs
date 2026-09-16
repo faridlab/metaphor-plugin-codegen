@@ -1259,6 +1259,63 @@ async fn run_migrations(module: &str, database_url: Option<&str>) -> Result<()> 
 #[allow(dead_code)]
 
 /// Fallback: run migrations manually using psql
+/// Every forward migration a module owns, in the order they must run.
+///
+/// Two places, not one. The top-level `migrations/` directory holds what the
+/// schema generator emits. A `migrations/manual/` subdirectory holds host
+/// scaffolding the generator does not own: tables a composing service adds on
+/// top of its modules, permission rows, read models for a cross-module seam.
+///
+/// That subdirectory used to be invisible here, because the sweep filtered on
+/// `is_file()` and a directory is not a file. Nothing reported it: the run
+/// summary was clean, because the files it skipped were never in its list, and
+/// a database rebuilt from empty came up structurally incomplete with no error
+/// anywhere. A step that depends on someone remembering is a step that
+/// eventually does not happen.
+///
+/// `manual/` runs AFTER the top level rather than interleaved by timestamp,
+/// because host scaffolding builds on module tables and never the other way
+/// round. That is also the order in which these were being applied by hand,
+/// which is the only ordering known to work.
+fn collect_forward_migrations(migrations_dir: &Path) -> Result<Vec<fs::DirEntry>> {
+    fn is_forward(entry: &fs::DirEntry) -> bool {
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Forward migrations only — never execute a rollback (`*.down.sql`).
+        // Running a down forward corrupts the schema: a later module's
+        // create_enums.down.sql does `DROP TYPE … CASCADE`, cascading away
+        // already-created columns that depend on the shared enum.
+        (name.ends_with(".sql") || name.ends_with(".up.sql"))
+            && name != "down.sql"
+            && !name.ends_with(".down.sql")
+            && !name.starts_with("seed")
+            && entry.path().is_file()
+    }
+
+    let mut top: Vec<_> = fs::read_dir(migrations_dir)?
+        .filter_map(|e| e.ok())
+        .filter(is_forward)
+        .collect();
+    top.sort_by_key(|e| e.file_name());
+
+    let manual_dir = migrations_dir.join("manual");
+    if manual_dir.is_dir() {
+        let mut manual: Vec<_> = fs::read_dir(&manual_dir)?
+            .filter_map(|e| e.ok())
+            .filter(is_forward)
+            .collect();
+        manual.sort_by_key(|e| e.file_name());
+        if !manual.is_empty() {
+            println!(
+                "   📁 {} host migration(s) from manual/",
+                manual.len()
+            );
+        }
+        top.extend(manual);
+    }
+
+    Ok(top)
+}
+
 async fn run_migrations_manually(migrations_dir: &Path, database_url: &str) -> Result<()> {
     // Parse database URL to get connection parameters
     let url = url::Url::parse(database_url)?;
@@ -1268,24 +1325,8 @@ async fn run_migrations_manually(migrations_dir: &Path, database_url: &str) -> R
     let password = url.password().unwrap_or("");
     let database = url.path().trim_start_matches('/');
 
-    // Get sorted list of migration files (support both .sql and .up.sql)
-    let mut entries: Vec<_> = fs::read_dir(migrations_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            // Forward migrations only: include *.sql / *.up.sql, but exclude ANY rollback
-            // file (`down.sql` or `<version>.down.sql`) and seed files. Running a `*.down.sql`
-            // forward is catastrophic — e.g. a later module's create_enums.down.sql does
-            // `DROP TYPE gl_posting_state CASCADE`, cascading away already-created columns
-            // that depend on the shared enum.
-            (name.ends_with(".sql") || name.ends_with(".up.sql"))
-                && name != "down.sql"
-                && !name.ends_with(".down.sql")
-                && !name.starts_with("seed")
-                && e.path().is_file()
-        })
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
+    // Top-level migrations plus the host scaffolding under manual/.
+    let entries = collect_forward_migrations(migrations_dir)?;
 
     if entries.is_empty() {
         println!("   (no migration files found)");
@@ -1579,21 +1620,8 @@ async fn run_migrations_with_tracking(
     // Ensure schema_migrations table exists
     ensure_schema_migrations_table(&db)?;
 
-    // Get sorted list of migration files
-    let mut entries: Vec<_> = fs::read_dir(migrations_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            // Forward migrations only — never execute rollback (`*.down.sql`) files.
-            // See run_migrations_manually for why running a down forward corrupts the schema.
-            (name.ends_with(".sql") || name.ends_with(".up.sql"))
-                && name != "down.sql"
-                && !name.ends_with(".down.sql")
-                && !name.starts_with("seed")
-                && e.path().is_file()
-        })
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
+    // Top-level migrations plus the host scaffolding under manual/.
+    let entries = collect_forward_migrations(migrations_dir)?;
 
     if entries.is_empty() {
         println!("   (no migration files found)");
