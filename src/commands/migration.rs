@@ -1463,6 +1463,13 @@ impl DbConnectionParams {
             "-d", &self.database,
             "-f", file_path.to_str().unwrap(),
             "-q",
+            // One transaction per FILE, not per statement: a migration is
+            // all-or-nothing, so a mid-file failure leaves no partial state
+            // for the sweep's retry to collide with (the fresh-bootstrap
+            // defect class where a retried migration died on its own
+            // half-applied columns). No fleet migration uses CONCURRENTLY
+            // or another transaction-excluded statement.
+            "-1",
             "-v", "ON_ERROR_STOP=1",
         ]);
         for (name, value) in vars {
@@ -1489,6 +1496,14 @@ impl DbConnectionParams {
                 "-d", &self.database,
                 "-f", file_path.to_str().unwrap(),
                 "-q",  // Quiet mode
+                // One transaction per FILE, not per statement: a migration
+                // is all-or-nothing, so a mid-file failure leaves no partial
+                // state for the sweep's retry to collide with (the
+                // fresh-bootstrap defect class where a retried migration
+                // died on its own half-applied columns). No fleet migration
+                // uses CONCURRENTLY or another transaction-excluded
+                // statement.
+                "-1",
                 // Abort on the FIRST failing statement: without this psql
                 // reports the error, keeps executing the rest of the file,
                 // and exits 0 — a half-applied migration would be recorded
