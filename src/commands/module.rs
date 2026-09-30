@@ -88,15 +88,11 @@ async fn create_module(name: &str, _author: &str, description: Option<&str>) -> 
     let _ = fs::remove_dir_all(module_path.join(".git"));
     let _ = fs::remove_file(module_path.join("Cargo.lock"));
 
-    // Rename the package and set the description in Cargo.toml.
+    // Rename the package, point it at its own repository, and start it at 0.1.0.
     let cargo_path = module_path.join("Cargo.toml");
     let cargo = fs::read_to_string(&cargo_path)
         .with_context(|| format!("reading {}", cargo_path.display()))?;
-    let mut out = cargo.replace("backbone-module-skeleton", name);
-    if let Some(desc) = description {
-        out = out.replace("Minimal Backbone Framework module skeleton", desc);
-    }
-    fs::write(&cargo_path, out)?;
+    fs::write(&cargo_path, stamp_module_manifest(&cargo, name, description))?;
 
     // Stamp the schema-module name into the skeleton's spec files. The Cargo package is e.g.
     // `backbone-organization`; the schema module (and its dedicated Postgres schema) is
@@ -123,6 +119,44 @@ async fn create_module(name: &str, _author: &str, description: Option<&str>) -> 
     println!("   4. Create + run migrations, then {}", "metaphor dev test".cyan());
 
     Ok(())
+}
+
+/// Turn the skeleton's `Cargo.toml` into the new module's.
+///
+/// Modules are published to crates.io, so the manifest must name the module's own repository
+/// (the skeleton points at `faridlab/backbone-module`), start at `0.1.0` rather than at
+/// whatever version the skeleton itself has reached, and drop the skeleton's `publish = false`
+/// (with the comment above it), which exists only so the template is never published.
+fn stamp_module_manifest(cargo: &str, name: &str, description: Option<&str>) -> String {
+    let mut out = cargo.replace("backbone-module-skeleton", name).replace(
+        "repository = \"https://github.com/faridlab/backbone-module\"",
+        &format!("repository = \"https://github.com/faridlab/{name}\""),
+    );
+    if let Some(desc) = description {
+        out = out.replace("Minimal Backbone Framework module skeleton", desc);
+    }
+    out = out.replace(
+        "# The skeleton itself is a template and is never published. `metaphor module\n\
+         # create` drops this line, so every module it creates is publishable.\n\
+         publish = false\n",
+        "",
+    );
+    // Only the [package] version: dependency versions sit on their own lines inside tables.
+    let mut in_package = false;
+    out.lines()
+        .map(|line| {
+            if line.starts_with('[') {
+                in_package = line.trim() == "[package]";
+            }
+            if in_package && line.starts_with("version = ") {
+                "version = \"0.1.0\"".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if out.ends_with('\n') { "\n" } else { "" }
 }
 
 /// Recursively replace `token` with `value` in every UTF-8 text file under `root`.
@@ -554,4 +588,50 @@ async fn install_module(package: &str, production: bool, version: Option<&str>, 
     }
 
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::stamp_module_manifest;
+
+    const SKELETON: &str = r#"[package]
+name = "backbone-module-skeleton"
+version = "0.1.18"
+edition = "2021"
+description = "Minimal Backbone Framework module skeleton"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/faridlab/backbone-module"
+# The skeleton itself is a template and is never published. `metaphor module
+# create` drops this line, so every module it creates is publishable.
+publish = false
+
+[dependencies]
+backbone-core = { version = "2.7.35", features = ["postgres"] }
+serde = { version = "1.0", features = ["derive"] }
+"#;
+
+    #[test]
+    fn stamps_name_repository_description_and_first_version() {
+        let out = stamp_module_manifest(SKELETON, "backbone-widget", Some("Widgets"));
+        assert!(out.contains("name = \"backbone-widget\"\n"));
+        assert!(out.contains("repository = \"https://github.com/faridlab/backbone-widget\"\n"));
+        assert!(out.contains("description = \"Widgets\"\n"));
+        assert!(out.contains("[package]\nname = \"backbone-widget\"\nversion = \"0.1.0\"\n"));
+    }
+
+    #[test]
+    fn drops_the_skeleton_publish_guard() {
+        assert!(SKELETON.contains("publish = false"));
+        let out = stamp_module_manifest(SKELETON, "backbone-widget", None);
+        assert!(!out.contains("publish"), "a created module must be publishable:\n{out}");
+    }
+
+    #[test]
+    fn leaves_dependency_versions_and_license_alone() {
+        let out = stamp_module_manifest(SKELETON, "backbone-widget", None);
+        assert!(out.contains("backbone-core = { version = \"2.7.35\", features = [\"postgres\"] }"));
+        assert!(out.contains("serde = { version = \"1.0\", features = [\"derive\"] }"));
+        assert!(out.contains("license = \"MIT OR Apache-2.0\"\n"));
+        assert!(out.contains("description = \"Minimal Backbone Framework module skeleton\""));
+        assert!(out.ends_with('\n'));
+    }
 }
