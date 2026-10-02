@@ -138,11 +138,18 @@ impl AppGenerator {
             kebab_changed + snake_changed
         );
 
+        // A new app starts its own release history, not the skeleton's.
+        let cargo_path = app_output_dir.join("Cargo.toml");
+        let cargo = fs::read_to_string(&cargo_path)
+            .with_context(|| format!("reading {}", cargo_path.display()))?;
+        fs::write(&cargo_path, with_first_version(&cargo))?;
+
         println!("✅ Successfully generated app: {}", config.app_name);
         println!("📁 Location: {}", app_output_dir.display());
         println!("🔧 Next steps:");
         println!("   1. Register in metaphor.yaml (name: {} / type: backend-service)", config.app_name);
         println!("   cd {}", config.app_name);
+        println!("   cargo build, then commit Cargo.lock (the pin probe in CI checks it)");
         println!("   cargo run");
 
         Ok(())
@@ -153,6 +160,26 @@ impl Default for AppGenerator {
     fn default() -> Self {
         Self::new().expect("Failed to create AppGenerator")
     }
+}
+
+/// Set the `[package]` version to `0.1.0`, leaving every dependency version alone.
+fn with_first_version(cargo: &str) -> String {
+    let mut in_package = false;
+    let out = cargo
+        .lines()
+        .map(|line| {
+            if line.starts_with('[') {
+                in_package = line.trim() == "[package]";
+            }
+            if in_package && line.starts_with("version = ") {
+                "version = \"0.1.0\"".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if cargo.ends_with('\n') { out + "\n" } else { out }
 }
 
 /// Recursively replace `token` with `value` in every UTF-8 text file under `root`.
@@ -241,6 +268,15 @@ pub fn to_title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_app_starts_at_0_1_0_and_keeps_its_dependency_versions() {
+        let skeleton = "[package]\nname = \"trial-app\"\nversion = \"0.6.15\"\n\n[dependencies]\nbackbone-core = { version = \"2.7.35\" }\nserde = \"1.0\"\n";
+        let out = with_first_version(skeleton);
+        assert!(out.contains("[package]\nname = \"trial-app\"\nversion = \"0.1.0\"\n"), "{out}");
+        assert!(out.contains("backbone-core = { version = \"2.7.35\" }") && out.contains("serde = \"1.0\""));
+        assert!(out.ends_with('\n'));
+    }
 
     #[test]
     fn test_string_transformations() {

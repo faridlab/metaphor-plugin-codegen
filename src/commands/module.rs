@@ -61,7 +61,31 @@ pub async fn handle_command(action: &ModuleAction) -> Result<()> {
 /// backbone-module is the single source of truth for module structure.
 const SKELETON_REPO: &str = "https://github.com/faridlab/backbone-module";
 
-async fn create_module(name: &str, _author: &str, description: Option<&str>) -> Result<()> {
+/// The crate (and repository, and directory) name for `metaphor module create <name>`.
+///
+/// Every backbone module is published to crates.io as `backbone-<name>`, so a bare name gets the
+/// prefix: `analytics` becomes `backbone-analytics`, and a release never claims a generic crate
+/// name. A name that already carries the prefix is kept. Crate names allow lowercase letters,
+/// digits and `-`; anything else is refused rather than silently rewritten.
+fn module_crate_name(name: &str) -> Result<String> {
+    let valid = !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && !name.ends_with('-');
+    if !valid {
+        return Err(anyhow::anyhow!(
+            "'{name}' is not a valid module name: use lowercase letters, digits and '-', starting with a letter"
+        ));
+    }
+    Ok(if name.starts_with("backbone-") { name.to_string() } else { format!("backbone-{name}") })
+}
+
+async fn create_module(requested: &str, _author: &str, description: Option<&str>) -> Result<()> {
+    let name_owned = module_crate_name(requested)?;
+    let name = name_owned.as_str();
+    if name != requested {
+        println!("ℹ️  Modules are published as backbone-<name>: creating {}", name.bright_cyan());
+    }
     println!("🏗️  {} module: {}", "Creating".bright_green(), name.bright_cyan());
 
     // Modules live at the workspace root (e.g. ./backbone-accounting), one project per repo.
@@ -591,7 +615,21 @@ async fn install_module(package: &str, production: bool, version: Option<&str>, 
 }
 #[cfg(test)]
 mod tests {
-    use super::stamp_module_manifest;
+    use super::{module_crate_name, stamp_module_manifest};
+
+    #[test]
+    fn a_bare_module_name_gets_the_backbone_prefix_once() {
+        assert_eq!(module_crate_name("analytics").unwrap(), "backbone-analytics");
+        assert_eq!(module_crate_name("field-service").unwrap(), "backbone-field-service");
+        assert_eq!(module_crate_name("backbone-analytics").unwrap(), "backbone-analytics");
+    }
+
+    #[test]
+    fn a_name_cargo_would_reject_is_refused() {
+        for bad in ["", "Analytics", "my_module", "9lives", "trailing-", "has space"] {
+            assert!(module_crate_name(bad).is_err(), "{bad:?} should be refused");
+        }
+    }
 
     const SKELETON: &str = r#"[package]
 name = "backbone-module-skeleton"
