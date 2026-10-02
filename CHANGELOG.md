@@ -5,6 +5,17 @@ All notable changes to `metaphor-codegen` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6]
+
+### Changed
+
+- `metaphor module create <name>` creates `backbone-<name>`: the crate, its directory and its
+  repository carry the `backbone-` prefix every published module has, so a release never
+  claims a generic crate name on crates.io. A name that already has the prefix is kept, and a
+  name cargo would reject (uppercase, `_`, a leading digit, a trailing `-`) is refused.
+- `metaphor apps generate` starts the new app at version `0.1.0` instead of the skeleton's
+  version, and its next steps say to commit `Cargo.lock`, which the app's pin probe checks.
+
 ## [0.2.4]
 
 ### Added
