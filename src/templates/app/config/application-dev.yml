@@ -30,7 +30,7 @@ modules:
 
   postman:
     enabled: true
-    smtp_port: 1025  # MailHog for development
+    smtp_port: 1025  # Mailpit for development
 
   bucket:
     enabled: true

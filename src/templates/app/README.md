@@ -40,7 +40,7 @@ apps/metaphor/                     # 🚀 MAIN APPLICATION (Laravel-like)
 1. **Start Supporting Services**
    ```bash
    cd apps/metaphor
-   docker-compose up -d postgres redis mailhog
+   docker-compose up -d postgres redis mailpit
    ```
 
 2. **Set Environment Variables**
@@ -80,7 +80,7 @@ apps/metaphor/                     # 🚀 MAIN APPLICATION (Laravel-like)
 - `GET /admin/health` - Detailed health check
 
 ### Development Services
-- **MailHog UI**: http://localhost:8025 (Email testing)
+- **Mailpit UI**: http://localhost:8025 (Email testing)
 - **Redis**: localhost:6379
 - **PostgreSQL**: localhost:5432
 
@@ -228,7 +228,7 @@ docker-compose --profile search up
 # With monitoring
 docker-compose --profile monitoring up
 
-# With storage (MinIO)
+# With storage (S3-compatible, served by RustFS)
 docker-compose --profile storage up
 
 # All services
