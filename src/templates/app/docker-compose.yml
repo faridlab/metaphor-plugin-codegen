@@ -34,9 +34,10 @@ services:
     restart: unless-stopped
     command: cargo run --bin metaphor
 
-  # PostgreSQL Database
+  # PostgreSQL 16, as in deployment/. A dev volume created by PostgreSQL 15 will not
+  # start on 16: remove it (`docker compose down -v`) or dump and restore first.
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     ports:
       - "5432:5432"
     environment:
@@ -71,32 +72,13 @@ services:
 
   # Mailpit for email testing (development; MIT, maintained successor to MailHog)
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.31.6
     ports:
       - "1025:1025"  # SMTP
       - "8025:8025"  # Web UI
     networks:
       - metaphor-network
     restart: unless-stopped
-
-  # Elasticsearch for search (optional). Licensed ELv2/SSPL (AGPLv3 also offered
-  # from 8.16): fine as an internal backend, but not open source and heavy on RAM.
-  # Prefer Postgres full-text search until a project actually needs this.
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    ports:
-      - "9200:9200"
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    networks:
-      - metaphor-network
-    restart: unless-stopped
-    profiles:
-      - search
 
   # Prometheus for metrics collection
   prometheus:
@@ -159,7 +141,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  elasticsearch_data:
   prometheus_data:
   grafana_data:
   minio_data:

@@ -222,9 +222,6 @@ docker-compose down
 
 ### Service Profiles
 ```bash
-# With Elasticsearch
-docker-compose --profile search up
-
 # With monitoring
 docker-compose --profile monitoring up
 
@@ -232,7 +229,7 @@ docker-compose --profile monitoring up
 docker-compose --profile storage up
 
 # All services
-docker-compose --profile search --profile monitoring --profile storage up
+docker-compose --profile monitoring --profile storage up
 ```
 
 ## 🚀 Deployment
